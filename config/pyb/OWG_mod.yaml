@@ -1,0 +1,149 @@
+# prompt_root_dir: './prompts/uncertainty_aware'
+grounding_prompt_root_dir: './prompts/uncertainty_aware'
+planning_prompt_root_dir: './prompts/uncertainty_aware'
+ranking_prompt_root_dir: './prompts/uncertainty_aware'
+image_size_h: 448
+image_size_w: 448
+image_crop: null
+
+grounding:
+  prompt_name: 'referring_segmentation_cautious'
+  prompt_template: "Description: {user_input}"
+  # prompt_variants: ["_cautious"]
+
+  include_raw_image: True
+
+  use_subplot_prompt: False
+  subplot_size: 224
+  
+  do_refine_marks: False
+  refine_marks:
+    maximum_hole_area: 0.01
+    maximum_island_area: 0.01
+    minimum_mask_area: 0.02
+    maximum_mask_area: 1.0
+
+  do_inctx: False
+  inctx_prompt_name: null
+
+  visualizer:
+    label:
+      text_include: True
+      text_scale: 0.5
+      text_thickness: 2
+      text_padding: 2
+      text_position: 'TOP_CENTER'
+    box:
+      box_include: False
+      box_thickness: 2
+    mask:
+      mask_include: True
+      mask_opacity: 0.25
+    polygon:
+      polygon_include: True
+      polygon_thickness: 2
+
+  request:
+    model_name: 'gpt-4o'
+    detail: 'auto'
+    temperature: 0.1
+    n: 2
+    logprobs: True
+    max_tokens: 512
+    seed: 12
+
+
+planning:
+  prompt_name: 'grasp_planning_confidence'
+  prompt_template: 'Task instruction: "Target object {user_input}".'
+  response_format: 'json'
+  # prompt_variants: ["_confidence"]
+
+  include_raw_image: False
+
+  use_subplot_prompt: False
+  subplot_size: 448
+
+  do_refine_marks: False
+  refine_marks:
+    maximum_hole_area: 0.01
+    maximum_island_area: 0.01
+    minimum_mask_area: 0.02
+    maximum_mask_area: 1.0
+
+  do_inctx: False
+  inctx_prompt_name: 'pyb/inctx_grasp_planning.pt'
+
+  visualizer:
+    label:
+      text_include: True
+      text_scale: 0.5
+      text_thickness: 2
+      text_padding: 2
+      text_position: 'CENTER_OF_MASS'
+    box:
+      box_include: False
+      box_thickness: 2
+    mask:
+      mask_include: True
+      mask_opacity: 0.25
+    polygon:
+      polygon_include: True
+      polygon_thickness: 1
+
+  request:
+    model_name: 'gpt-4o'
+    detail: 'auto'
+    temperature: 0.0
+    n: 2
+    max_tokens: 256
+
+
+grasping:
+  crop_square_size: 196
+
+  prompt_name: 'grasp_ranking_uncertainty_description'
+  prompt_template: "Rank the grasp poses."
+  # prompt_variants: ["_uncertainty_description"]
+
+  use_3d_prompt: False
+  gripper_mesh_path: 'owg_robot/assets/robotiq_2f_140/robotiq_arg2f_140.obj'
+  use_subplot_prompt: True
+  subplot_size: 224
+
+  do_inctx: False
+  inctx_prompt_name: 'pyb/inctx_grasp_ranking.pt'
+
+  visualizer:
+    as_line: True
+    line_thickness: 8
+    grasp_colors: 'RED,GREEN'
+    with_gray: False
+    label:
+      label_include: False
+      text_color: 'WHITE'
+      text_rect_color: 'BLACK'
+      text_padding: 2
+      text_thickness: 1
+      text_scale: 0.7
+      text_position: 'CENTER'
+    box:
+      box_include: False
+      box_color: 'RED'
+      box_thickness: 2
+    mask:
+      mask_include: False
+      mask_color: 'RED'
+      mask_opacity: 0.15
+    polygon:
+      polygon_include: True
+      polygon_color: 'RED'
+      polygon_thickness: 2
+
+  request:
+    model_name: 'gpt-4o'
+    detail: 'auto'
+    temperature: 0.0
+    n: 2
+    max_tokens: 8192
+    logprobs: True

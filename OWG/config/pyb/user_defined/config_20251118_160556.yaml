@@ -1,0 +1,103 @@
+image_size_h: 448
+image_size_w: 448
+image_crop: null
+grounding_prompt_root_dir: ./prompts/uncertainty_aware
+grounding:
+  prompt_name: referring_segmentation_cautious
+  prompt_template: 'Description: {user_input}'
+  request:
+    model_name: null
+    temperature: 0.1
+    n: 2
+    max_tokens: 512
+    logprobs: true
+  include_raw_image: true
+  use_subplot_prompt: false
+  subplot_size: 224
+  do_refine_marks: false
+  do_inctx: false
+  visualizer:
+    label:
+      text_include: true
+      text_scale: 0.5
+      text_thickness: 2
+      text_padding: 2
+      text_position: TOP_CENTER
+    box:
+      box_include: false
+      box_thickness: 2
+    mask:
+      mask_include: true
+      mask_opacity: 0.25
+    polygon:
+      polygon_include: true
+      polygon_thickness: 2
+planning_prompt_root_dir: ./prompts/uncertainty_aware
+planning:
+  prompt_name: grasp_planning_confidence
+  prompt_template: 'Task instruction: "Target object {user_input}".'
+  request:
+    model_name: null
+    temperature: 0.0
+    n: 2
+    max_tokens: 256
+    logprobs: false
+  response_format: json
+  include_raw_image: false
+  use_subplot_prompt: false
+  subplot_size: 448
+  do_refine_marks: false
+  do_inctx: false
+  visualizer:
+    label:
+      text_include: true
+      text_scale: 0.5
+      text_thickness: 2
+      text_padding: 2
+      text_position: CENTER_OF_MASS
+    box:
+      box_include: false
+      box_thickness: 2
+    mask:
+      mask_include: true
+      mask_opacity: 0.25
+    polygon:
+      polygon_include: true
+      polygon_thickness: 1
+ranking_prompt_root_dir: ./prompts/uncertainty_aware
+grasping:
+  prompt_name: test2
+  prompt_template: Rank the grasp poses.
+  request:
+    model_name: null
+    temperature: 0.0
+    n: 2
+    max_tokens: 8192
+    logprobs: true
+  crop_square_size: 196
+  use_3d_prompt: false
+  gripper_mesh_path: owg_robot/assets/robotiq_2f_140/robotiq_arg2f_140.obj
+  use_subplot_prompt: true
+  subplot_size: 224
+  do_inctx: false
+  visualizer:
+    as_line: true
+    line_thickness: 8
+    grasp_colors: RED,GREEN
+    with_gray: false
+    label:
+      label_include: false
+      text_color: WHITE
+      text_rect_color: BLACK
+    box:
+      box_include: false
+      box_color: RED
+      box_thickness: 2
+    mask:
+      mask_include: false
+      mask_color: RED
+      mask_opacity: 0.15
+    polygon:
+      polygon_include: true
+      polygon_color: RED
+      polygon_thickness: 2

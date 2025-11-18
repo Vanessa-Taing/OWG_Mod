@@ -1,0 +1,6 @@
+artifact_location: file:///home/owner/OWG/mlruns/915428145976913114
+creation_time: 1762505090821
+experiment_id: '915428145976913114'
+last_update_time: 1762505090821
+lifecycle_stage: active
+name: OWG_LLM_Tracing

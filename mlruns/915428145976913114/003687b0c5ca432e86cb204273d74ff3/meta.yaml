@@ -1,0 +1,14 @@
+artifact_uri: file:///home/owner/OWG/mlruns/915428145976913114/003687b0c5ca432e86cb204273d74ff3/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '915428145976913114'
+lifecycle_stage: active
+run_id: 003687b0c5ca432e86cb204273d74ff3
+run_name: burly-gull-284
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1762505730334
+status: 1
+tags: []
+user_id: owner

@@ -1,0 +1,98 @@
+{
+  "metadata": {
+    "grounder": [
+      {
+        "confidence": -1.0,
+        "uncertainty_description": "N/A",
+        "posterior": {
+          "To remove nails, you would typically use a hammer with a claw. In the images, the hammer is located at the bottom left.\n\nThe ID for the hammer is 16.\n\nMy final answer is: [16]": 1.0
+        },
+        "entropy": 0.0,
+        "step": 1
+      },
+      {
+        "confidence": -1.0,
+        "uncertainty_description": "N/A",
+        "posterior": {
+          "To remove nails, you would typically use a hammer with a claw. In the images, the hammer is located at the bottom left.\n\nThe ID for the hammer is 16.\n\nMy final answer is: [16]": 1.0
+        },
+        "entropy": 0.0,
+        "step": 1
+      }
+    ],
+    "planner": [
+      {
+        "confidence": 0.85,
+        "uncertainty_description": "N/A",
+        "posterior": {
+          "Thoughts: The target object 16 is partially visible and appears to be underneath object 13. Object 13 is blocking a direct top-down grasp of object 16.\n\nPlan:\n```json\n[\n    {\"action\": \"remove\", \"input\": 13},\n    {\"action\": \"pick\", \"input\": 16}\n]\n```\nConfidence score: 0.85": 0.5,
+          "Thoughts: The target object 16 is partially visible and appears to be blocked by object 13, which is lying on top of it. To grasp object 16, object 13 needs to be removed first.\n\nPlan:\n```json\n[\n    {\"action\": \"remove\", \"input\": 13},\n    {\"action\": \"pick\", \"input\": 16}\n]\n```\nConfidence score: 0.95": 0.5
+        },
+        "entropy": 1.0,
+        "step": 1
+      },
+      {
+        "confidence": 0.85,
+        "uncertainty_description": "N/A",
+        "posterior": {
+          "Thoughts: The target object 16 is partially visible and appears to be underneath object 13. Object 13 is blocking a direct top-down grasp of object 16.\n\nPlan:\n```json\n[\n    {\"action\": \"remove\", \"input\": 13},\n    {\"action\": \"pick\", \"input\": 16}\n]\n```\nConfidence score: 0.85": 0.5,
+          "Thoughts: The target object 16 is partially visible and appears to be blocked by object 13, which is lying on top of it. To grasp object 16, object 13 needs to be removed first.\n\nPlan:\n```json\n[\n    {\"action\": \"remove\", \"input\": 13},\n    {\"action\": \"pick\", \"input\": 16}\n]\n```\nConfidence score: 0.95": 0.5
+        },
+        "entropy": 1.0,
+        "step": 1
+      }
+    ],
+    "ranker": [
+      {
+        "confidence": -1.0,
+        "uncertainty_description": "No ambiguity.",
+        "posterior": {
+          "1) The object of interest is a red rectangular box. Surrounding it are a green pear and a hammer.\n\n2) Grasp pose analysis:\n   - Pose 1: The blue lines (fingers) are close to the hammer, potentially leading to contact.\n   - Pose 2: The blue lines are positioned away from surrounding objects, avoiding contact.\n   - Pose 3: The blue lines are close to the hammer, potentially leading to contact.\n\n3) Ranking of grasp poses from best to worst:\n   - Pose 2: No contact and close to the center.\n   - Pose 1: Potential contact with the hammer.\n   - Pose 3: Potential contact with the hammer.\n\n4) Uncertainty: No ambiguity.\n\nMy final answer is: [2, 1, 3]\nUncertainty: No ambiguity.": 0.5,
+          "1) The object of interest is a red rectangular box. Surrounding it are a green pear and a hammer.\n\n2) Grasp Pose Analysis:\n   - Pose 1: The blue lines (fingers) are close to the hammer, potentially leading to contact.\n   - Pose 2: The blue lines are positioned away from surrounding objects, avoiding contact.\n   - Pose 3: The blue lines are close to the hammer, potentially leading to contact.\n\n3) Ranked Grasp Poses:\n   - Best: Pose 2 (centered and contact-free)\n   - Pose 1 (potential contact with hammer)\n   - Pose 3 (potential contact with hammer)\n\n4) Uncertainty: No ambiguity in the visibility of objects and potential contacts.\n\nMy final answer is: [2, 1, 3]\nUncertainty: \"No ambiguity.\"": 0.5
+        },
+        "entropy": 1.0,
+        "step": 0
+      },
+      {
+        "confidence": -1.0,
+        "uncertainty_description": "No ambiguity.",
+        "posterior": {
+          "1) The object of interest is a rectangular box outlined in green. Surrounding it is a blue object and another red box.\n\n2) Grasp poses leading to contacts:\n   - Pose 1: No contact with surrounding objects.\n   - Pose 2: Contacts the blue object.\n   - Pose 3: No contact with surrounding objects.\n   - Pose 4: Contacts the blue object.\n\n3) Ranked grasp poses from best to worst:\n   - Pose 3: Centered and no contact.\n   - Pose 1: No contact, slightly off-center.\n   - Pose 2: Contacts the blue object.\n   - Pose 4: Contacts the blue object.\n\n4) Uncertainty: No ambiguity.\n\nMy final answer is: [3, 1, 2, 4]\nUncertainty: No ambiguity.": 1.0
+        },
+        "entropy": 0.0,
+        "step": 1
+      }
+    ]
+  },
+  "model": {
+    "grounder": {
+      "model_name": "gpt-4o",
+      "temperature": 0.1,
+      "max_tokens": 256,
+      "n": 2
+    },
+    "ranker": {
+      "model_name": "gpt-4o",
+      "temperature": 0.0,
+      "max_tokens": 256,
+      "n": 2
+    },
+    "planner": {
+      "model_name": "gpt-4o",
+      "temperature": 0.0,
+      "max_tokens": 256,
+      "n": 2
+    }
+  },
+  "prompt_variants": {
+    "grounder": [
+      "_cautious"
+    ],
+    "ranker": [
+      "_uncertainty_description"
+    ],
+    "planner": [
+      "_confidence"
+    ]
+  }
+}

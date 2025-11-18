@@ -1,0 +1,29 @@
+prompt_root_dir: /home/owner/OWG/prompts/user_defined
+image_size_h: 448
+image_size_w: 448
+image_crop: null
+grounding:
+  prompt_name: custom_prompt
+  prompt_template: '...'
+  prompt_variants:
+  - _user_defined
+  include_raw_image: true
+  use_subplot_prompt: false
+  subplot_size: 224
+  do_refine_marks: false
+  do_inctx: false
+  visualizer: {}
+  request:
+    model_name: gpt-4o
+    detail: auto
+    temperature: 0.1
+    n: 2
+    logprobs: true
+    max_tokens: 512
+    seed: 42
+planning:
+  prompt_name: grasp_planning
+  prompt_template: 'Task instruction: ''Target object {user_input}''.'
+grasping:
+  prompt_name: grasp_ranking
+  prompt_template: Rank the grasp poses.

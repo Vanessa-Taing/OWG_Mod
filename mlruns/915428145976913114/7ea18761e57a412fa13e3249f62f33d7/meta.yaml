@@ -1,0 +1,14 @@
+artifact_uri: file:///home/owner/OWG/mlruns/915428145976913114/7ea18761e57a412fa13e3249f62f33d7/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '915428145976913114'
+lifecycle_stage: active
+run_id: 7ea18761e57a412fa13e3249f62f33d7
+run_name: grasp_experiment
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1762857086511
+status: 1
+tags: []
+user_id: owner

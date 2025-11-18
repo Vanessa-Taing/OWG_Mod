@@ -1,0 +1,33 @@
+image_size_h: 448
+image_size_w: 448
+image_crop: null
+grounding:
+  prompt_name: referring_segmentation_cautious
+  prompt_template: 'Description: {user_input}'
+  request:
+    model_name: gpt-4o
+    temperature: 0.1
+    n: 2
+    max_tokens: 256
+    logprobs: true
+grounding_prompt_root_dir: /home/owner/OWG/prompts/uncertainty_aware
+planning:
+  prompt_name: grasp_planning_confidence
+  prompt_template: 'Task instruction: "Target object {user_input}".'
+  request:
+    model_name: gpt-4o
+    temperature: 0.0
+    n: 2
+    max_tokens: 256
+    logprobs: false
+planning_prompt_root_dir: /home/owner/OWG/prompts/uncertainty_aware
+grasping:
+  prompt_name: grasp_ranking_uncertainty_description
+  prompt_template: Rank the grasp poses.
+  request:
+    model_name: gpt-4o
+    temperature: 0.0
+    n: 2
+    max_tokens: 256
+    logprobs: true
+ranking_prompt_root_dir: /home/owner/OWG/prompts/uncertainty_aware
