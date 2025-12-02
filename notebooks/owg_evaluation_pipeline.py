@@ -302,12 +302,18 @@ def main():
         "planner": planner.get_model_params()
     })
     
-    tracker.set_prompt_variants({
-        "grounder": grounder.get_variants(),
-        "ranker": grasp_ranker.get_variants(),
-        "planner": planner.get_variants()
-    })
+    # tracker.set_prompt_variants({
+    #     "grounder": grounder.get_variants(),
+    #     "ranker": grasp_ranker.get_variants(),
+    #     "planner": planner.get_variants()
+    # })
     
+    tracker.set_prompt_name({
+        "grounder": grounder.get_name(),
+        "ranker": grasp_ranker.get_name(),
+        "planner": planner.get_name()
+    })
+
     # Print summary
     print("\n" + "=" * 60)
     print("RESULTS")

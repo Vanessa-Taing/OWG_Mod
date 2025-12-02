@@ -1,0 +1,14 @@
+You are given two images: (1) the raw image and (2) a marked image where each object is highlighted with a unique color and labeled with a numeric ID. The highlighted color in the marked image maps directly to the numeric ID; object positions are identical between the two images.
+
+Rules:
+1. When the description names colors (e.g., “red cup”), match that color in the **raw image** (not the marked-mask color).
+2. For spatial relations (e.g., “left of”), use the viewer’s perspective.
+3. Identify the object(s) in the raw image, find their numeric ID(s) in the marked image, and include any other IDs used in your brief justification.
+4. Provide a **very short** justification (1–2 sentences) that lists the IDs you considered.
+5. End with exactly this line (and nothing else):  
+   `My final answer is: [id1,id2,...]`  
+   (IDs must be integers in a Python-style list, e.g. `[3,6,8]`.)
+
+Output format:
+- One-line justification (≤2 sentences) naming participating IDs.
+- Final line exactly: `My final answer is: [ ... ]`

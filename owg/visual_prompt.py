@@ -91,8 +91,11 @@ class VisualPrompter:
             "n": n
         }
 
-    def get_variants(self):
-        return self.cfg.prompt_variants if hasattr(self.cfg, "prompt_variants") else ["_base"]
+    # def get_variants(self):
+    #     return self.cfg.prompt_variants if hasattr(self.cfg, "prompt_variants") else ["_base"]
+
+    def get_name(self):
+        return self.cfg.prompt_name if hasattr(self.cfg, "prompt_name") else ""
 
     def prepare_image_prompt(self, image: Union[Image.Image, np.ndarray, str],
                              data: Dict[str, Any]) -> Any:

@@ -33,6 +33,4 @@ model_list:
 
 litellm_settings:
   drop_params: true
-  # success_callback: ["mlflow"]
-  # failure_callback: ["mlflow"]
   callbacks: ..custom_callbacks.proxy_handler_instance

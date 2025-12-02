@@ -8,7 +8,8 @@ class ExperimentTracker:
     def __init__(self):
         self.metadata = defaultdict(list)  # module_name: [metadata_step1, metadata_step2, ...]
         self.model_settings = {}           # e.g., from get_model_params()
-        self.prompt_variants = []          # list of prompt types
+        # self.prompt_variants = []          # list of prompt types
+        self.prompt_name = ""         # prompt name
         self.step_counters = defaultdict(int)  # internal counter per module for iteration tracking
 
     def set_metadata(self, metadata_dict: Dict[str, Any], module_name: Optional[str] = None):
@@ -26,11 +27,15 @@ class ExperimentTracker:
     def set_prompt_variants(self, variants: List[str]):
         self.prompt_variants = variants
 
+    def set_prompt_name(self, name: str):
+        self.prompt_name = name
+
     def get_summary(self):
         return {
             "metadata": dict(self.metadata),
             "model": self.model_settings,
-            "prompt_variants": self.prompt_variants
+            # "prompt_variants": self.prompt_variants
+            "prompt_name": self.prompt_name
         }
     
     def save_uncertainty_log(self, tracker_summary, save_path="logs/uncertainty_logs.jsonl"):
@@ -39,7 +44,8 @@ class ExperimentTracker:
             "timestamp": datetime.now().isoformat(),
             "metadata": tracker_summary.get("metadata", {}),
             "model": tracker_summary.get("model", {}),
-            "prompt_variants": tracker_summary.get("prompt_variants", {}),
+            # "prompt_variants": tracker_summary.get("prompt_variants", {}),
+            "prompt_name": tracker_summary.get("prompt_name", {}),
         }
         with open(save_path, "a") as f:
             f.write(json.dumps(record) + "\n")

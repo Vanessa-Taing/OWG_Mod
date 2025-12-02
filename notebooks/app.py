@@ -798,9 +798,57 @@ with tabs[4]:
                         user_prefixed = f"👤 {default_prompt}"
                         default_index = all_prompts.index(user_prefixed) if user_prefixed in all_prompts else 0
                     
+                    if stage_key == "grounding":
+                        allowed_prefix = "referring_segmentation_"
+                    elif stage_key == "planning":
+                        allowed_prefix = "grasp_planning_"
+                    elif stage_key == "grasping":
+                        allowed_prefix = "grasp_ranking_"
+                    else:
+                        allowed_prefix = ""
+
+                    # ---------------------------------------------------------
+                    # 🔹 Filter system prompts (must match prefix)
+                    # 🔹 User prompts are NOT filtered — all included
+                    # ---------------------------------------------------------
+                    filtered_system_prompts = [
+                        p for p in system_prompts if p.startswith(allowed_prefix)
+                    ]
+
+                    # user prompts remain unfiltered
+                    filtered_user_prompts = user_prompts[:]   # copy
+
+                    # Build UI list
+                    filtered_all_prompts = (
+                        sorted(filtered_system_prompts) +
+                        sorted([f"👤 {p}" for p in filtered_user_prompts])
+                    )
+
+                    if not filtered_system_prompts:
+                        st.warning(f"No **system prompts** found starting with `{allowed_prefix}`.")
+                        # still show user prompts if available
+                        if not filtered_user_prompts:
+                            st.error("No prompts available at all.")
+                            filtered_all_prompts = ["<no prompts available>"]
+
+                    # ---------------------------------------------------------
+                    # 🎛️ Selectbox for filtered prompts
+                    # ---------------------------------------------------------
+                    default_prompt = default_config["prompt_name"]
+
+                    try:
+                        default_index = filtered_all_prompts.index(default_prompt)
+                    except:
+                        user_prefixed = f"👤 {default_prompt}"
+                        default_index = (
+                            filtered_all_prompts.index(user_prefixed)
+                            if user_prefixed in filtered_all_prompts
+                            else 0
+                        )
+
                     prompt_name = st.selectbox(
                         "Prompt File",
-                        options=all_prompts,
+                        options=filtered_all_prompts, #all_prompts,
                         index=default_index,
                         key=f"{stage_key}_prompt_name",
                         help="Select the complete prompt file (full name without .txt)"
@@ -916,7 +964,7 @@ with tabs[4]:
         'prompt_name': 'grasp_planning_confidence',
         'prompt_template': 'Task instruction: "Target object {user_input}".',
         'prompt_root_dir': UNCERTAINTY_DIR,
-        'request': {'model_name': 'gpt-4o', 'temperature': 0.0, 'n': 2, 'max_tokens': 256, 'logprobs': False}
+        'request': {'model_name': 'gpt-4o', 'temperature': 0.0, 'n': 2, 'max_tokens': 256, 'logprobs': True}
     }
     
     grasping_default = {
