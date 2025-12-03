@@ -37,8 +37,7 @@ from owg_robot.objects import YcbObjects
 from third_party.grconvnet import *
 from owg.utils.grasp import Grasp2D
 from owg.visual_prompt import VisualPrompterGrounding, VisualPrompterPlanning, VisualPrompterGraspRanking
-from owg_mod.tracker import GraspStatsTracker
-
+from owg_mod.tracker import GraspStatsTracker, generate_experiment_id, detect_experiment_group, estimate_scenario_difficulty
 
 def display_image(path_or_array, size=(10, 10), save_path=None):
     """Helper function to display/save images"""
@@ -55,7 +54,6 @@ def display_image(path_or_array, size=(10, 10), save_path=None):
         plt.savefig(save_path, bbox_inches='tight', pad_inches=0)
         print(f"Image saved to {save_path}")
     plt.close()
-
 
 def setup_environment(seed, n_objects=12):
     """Setup PyBullet environment with objects"""
@@ -134,7 +132,8 @@ def setup_grasps(env, grasp_generator, camera, visualise_grasps=False):
 
 
 def execute_and_track_actions(actions, env, image, all_masks, all_grasp_rects, 
-                              obj_ids, grasp_ranker, tracker, output_dir):
+                              obj_ids, grasp_ranker, tracker, output_dir, 
+                              difficulty_label=None, difficulty_score=None):  # ADD
     """Execute grasping actions and track results"""
     if isinstance(actions, dict):
         actions = [actions]
@@ -176,13 +175,20 @@ def execute_and_track_actions(actions, env, image, all_masks, all_grasp_rects,
             env.step_simulation()
         
         # Log result
+        uncertainty_snapshot = tracker.extract_uncertainty_snapshot()
+        additional_info = {}  # ADD
+        if difficulty_label:  # ADD
+            additional_info["scenario_difficulty"] = difficulty_label  # ADD
+            additional_info["difficulty_score"] = difficulty_score  # ADD
+        
         tracker.record_grasp(
             success=success_grasp,
             object_id=obj_id,
             position=env.get_obj_pos(obj_id),
             retries=num_attempts - 1,
             grasp_index=act['grasps'],
-            additional_info={"timestamp": datetime.now().isoformat()}
+            uncertainty_snapshot=uncertainty_snapshot,
+            additional_info=additional_info  # MODIFIED
         )
         
         tracker.set_metadata(metadata_rank, module_name="ranker")
@@ -252,8 +258,17 @@ def main():
     grasp_ranker = VisualPrompterGraspRanking(args.config, debug=False)
     
     # Initialize tracker
-    tracker = GraspStatsTracker()
-    
+    # tracker = GraspStatsTracker()
+
+    experiment_id = generate_experiment_id(
+        seed=args.seed,
+        config_path=args.config,
+        timestamp=datetime.now().isoformat()
+    )
+    print(f"\n🔬 Experiment ID: {experiment_id}")
+    # Determine experiment group - we'll set this after prompts are loaded
+    tracker = GraspStatsTracker(experiment_id=experiment_id)  # group set later
+
     # Referring segmentation
     print(f"\n--- Grounding Query: '{args.query}' ---")
     visual_prompt, _ = grounder.prepare_image_prompt(image.copy(), marker_data)
@@ -276,7 +291,34 @@ def main():
         text_query=target_id, image=image.copy(), data=marker_data)
     action = plan
     print(f"Planned action: {action}")
+
+    # Save tracking results
+    print("\n--- Experiment Tracking ---")
+    tracker.set_metadata(metadata_ground, module_name="grounder")
+    tracker.set_metadata(metadata_plan, module_name="planner")
+
+    # ADD difficulty calculation HERE (after planner metadata is set):
+    difficulty_label, difficulty_score = estimate_scenario_difficulty(
+        tracker.metadata.get("planner", []),
+        n_objects=args.n_objects
+    )
+    print(f"⚠️  Estimated difficulty: {difficulty_label} ({difficulty_score:.2f})")    
+
+    tracker.set_model_settings({
+        "grounder": grounder.get_model_params(),
+        "ranker": grasp_ranker.get_model_params(),
+        "planner": planner.get_model_params()
+    })
     
+    tracker.set_prompt_name({
+        "grounder": grounder.get_name(),
+        "ranker": grasp_ranker.get_name(),
+        "planner": planner.get_name()
+    })
+    experiment_group = detect_experiment_group(tracker.prompt_name)
+    tracker.experiment_group = experiment_group
+    print(f"📊 Experiment group: {experiment_group}")
+
     # Execute actions
     print("\n--- Executing Actions ---")
     execute_and_track_actions(
@@ -288,31 +330,10 @@ def main():
         obj_ids=obj_ids,
         grasp_ranker=grasp_ranker,
         tracker=tracker,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        difficulty_label=difficulty_label,      # ADD
+        difficulty_score=difficulty_score        # ADD
     )
-    
-    # Save tracking results
-    print("\n--- Experiment Tracking ---")
-    tracker.set_metadata(metadata_ground, module_name="grounder")
-    tracker.set_metadata(metadata_plan, module_name="planner")
-    
-    tracker.set_model_settings({
-        "grounder": grounder.get_model_params(),
-        "ranker": grasp_ranker.get_model_params(),
-        "planner": planner.get_model_params()
-    })
-    
-    # tracker.set_prompt_variants({
-    #     "grounder": grounder.get_variants(),
-    #     "ranker": grasp_ranker.get_variants(),
-    #     "planner": planner.get_variants()
-    # })
-    
-    tracker.set_prompt_name({
-        "grounder": grounder.get_name(),
-        "ranker": grasp_ranker.get_name(),
-        "planner": planner.get_name()
-    })
 
     # Print summary
     print("\n" + "=" * 60)

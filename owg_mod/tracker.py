@@ -3,13 +3,65 @@ import json
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 from collections import defaultdict
+import hashlib
 
+def generate_experiment_id(seed, config_path, timestamp):
+    """Generate unique experiment ID from seed, config, and timestamp"""
+    config_hash = hashlib.md5(config_path.encode()).hexdigest()[:8]
+    ts_short = timestamp.split('T')[0].replace('-', '')  # YYYYMMDD
+    return f"{ts_short}_{config_hash}_{seed}"
+
+# ADD this helper function before ExperimentTracker class:
+def detect_experiment_group(prompt_names):
+    """Detect if experiment uses baseline or uncertainty-aware prompts"""
+    # prompt_names is dict like {"grounder": "...", "planner": "...", "ranker": "..."}
+    prompt_values = list(prompt_names.values())
+    
+    # Check if ANY prompt has '_base' suffix
+    if any("_base" in p for p in prompt_values):
+        return "baseline"
+    else:
+        return "uncertainty_aware"
+    
+# ADD this helper function:
+def estimate_scenario_difficulty(planner_metadata, n_objects):
+    """Simple proxy for scenario difficulty based on planning complexity"""
+    difficulty_score = 0
+    
+    # Factor 1: Number of objects (normalized to 0-1)
+    difficulty_score += min(n_objects / 20.0, 1.0) * 0.3
+    
+    # Factor 2: Check if plan has 'remove' actions (occlusion present)
+    # This is extracted from planner's reasoning if available
+    if planner_metadata and len(planner_metadata) > 0:
+        latest_plan = planner_metadata[-1]
+        
+        # Check uncertainty description for occlusion keywords
+        uncertainty_desc = latest_plan.get("uncertainty_description", "")
+        if any(word in uncertainty_desc.lower() for word in ["cover", "block", "occlu", "obstruct"]):
+            difficulty_score += 0.4
+        
+        # Check confidence - low confidence = harder scenario
+        conf = latest_plan.get("confidence", 1.0)
+        if conf != -1 and conf < 0.7:
+            difficulty_score += 0.3
+    
+    # Map to categorical labels
+    if difficulty_score < 0.3:
+        return "easy", difficulty_score
+    elif difficulty_score < 0.6:
+        return "medium", difficulty_score
+    else:
+        return "hard", difficulty_score
+    
 class ExperimentTracker:
-    def __init__(self):
+    def __init__(self, experiment_id=None, experiment_group="uncertainty_aware"): # ADD PARAMS
+        self.experiment_id = experiment_id  # ADD
+        self.experiment_group = experiment_group  # ADD
         self.metadata = defaultdict(list)  # module_name: [metadata_step1, metadata_step2, ...]
         self.model_settings = {}           # e.g., from get_model_params()
         # self.prompt_variants = []          # list of prompt types
-        self.prompt_name = ""         # prompt name
+        self.prompt_name = {}         # prompt name
         self.step_counters = defaultdict(int)  # internal counter per module for iteration tracking
 
     def set_metadata(self, metadata_dict: Dict[str, Any], module_name: Optional[str] = None):
@@ -37,10 +89,15 @@ class ExperimentTracker:
             # "prompt_variants": self.prompt_variants
             "prompt_name": self.prompt_name
         }
-    
+
+    def get_prompt_variants(self):
+        return str(self.prompt_variants)    
+
     def save_uncertainty_log(self, tracker_summary, save_path="logs/uncertainty_logs.jsonl"):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         record = {
+            "experiment_id": self.experiment_id,  # ADD
+            "experiment_group": self.experiment_group,  # ADD
             "timestamp": datetime.now().isoformat(),
             "metadata": tracker_summary.get("metadata", {}),
             "model": tracker_summary.get("model", {}),
@@ -50,27 +107,42 @@ class ExperimentTracker:
         with open(save_path, "a") as f:
             f.write(json.dumps(record) + "\n")
 
-    def get_prompt_variants(self):
-        return str(self.prompt_variants)
-
+    def extract_uncertainty_snapshot(self): #ADD THIS METHOD
+        """Extract latest uncertainty values for linking to grasp outcome"""
+        snapshot = {}
+        
+        # Get most recent metadata from each module
+        for module_name in ["grounder", "planner", "ranker"]:
+            if module_name in self.metadata and self.metadata[module_name]:
+                latest = self.metadata[module_name][-1]  # Most recent
+                
+                # Extract confidence if present
+                if "confidence" in latest:
+                    conf = latest["confidence"]
+                    snapshot[f"{module_name}_confidence"] = conf if conf != -1 else None
+                
+                # Extract entropy if present
+                if "entropy" in latest:
+                    snapshot[f"{module_name}_entropy"] = latest["entropy"]
+        
+        return snapshot if snapshot else None
 
 class GraspStatsTracker(ExperimentTracker):
-    def __init__(self, log_path: str = "logs/experiment_metrics.jsonl"):
-        super().__init__()
+    def __init__(self, log_path: str = "logs/experiment_metrics.jsonl", experiment_id=None, experiment_group="uncertainty_aware"):  # ADD PARAMS):
+        super().__init__(experiment_id, experiment_group)  # MODIFY to pass params
         self.grasp_log = []
         self.total_grasps = 0
         self.retries = 0
         self.successful_grasps = 0
         self.per_object_stats = defaultdict(lambda: {"success": 0, "total": 0})
         self.log_path = log_path
-
-        # Ensure the logs directory exists
         os.makedirs(os.path.dirname(self.log_path), exist_ok=True)
 
     def record_grasp(self, success: bool, object_id: int, position: List[float],
                      grasp_type: str = "2D",
                      grasp_index: Optional[int] = None, retries: int = 0,
-                     additional_info: Optional[Dict[str, Any]] = None):
+                     additional_info: Optional[Dict[str, Any]] = None, 
+                     uncertainty_snapshot: Optional[Dict[str, float]] = None):  # ADD THIS PARAM
         """Record a single grasp event and append it to both memory and file."""
         self.total_grasps += 1
         self.retries += retries
@@ -80,7 +152,9 @@ class GraspStatsTracker(ExperimentTracker):
         self.per_object_stats[object_id]["total"] += 1
 
         entry = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "experiment_id": self.experiment_id,  # ADD
+            "experiment_group": self.experiment_group,  # ADD
+            "timestamp": datetime.now().isoformat(), # "timestamp": datetime.now().isoformat(timespec="seconds"),
             "object_id": object_id,
             "position": position,
             "success": success,
@@ -88,6 +162,10 @@ class GraspStatsTracker(ExperimentTracker):
             "grasp_index": grasp_index,
             "retries": retries,
         }
+
+        if uncertainty_snapshot:
+            entry["uncertainty_at_decision"] = uncertainty_snapshot
+
         if additional_info:
             entry.update(additional_info)
 

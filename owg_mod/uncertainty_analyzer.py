@@ -3,58 +3,131 @@ from collections import Counter
 from scipy.stats import entropy
 from typing import List, Optional, Dict, Any
 import numpy as np
-from sentence_transformers import SentenceTransformer, util
-
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+from sklearn.cluster import AgglomerativeClustering
+from sentence_transformers import util
+from sentence_transformers import SentenceTransformer
+    
+embedder = SentenceTransformer('all-MiniLM-L6-v2')
 
 class UncertaintyAnalyzer:
     @staticmethod
-    def calculate_posterior(responses: List[Dict[str, Any]]) -> Dict[str, float]:
+    def cluster_equivalent_responses(texts: List[str], embeddings, threshold: float = 0.85):
         """
-        Calculate posterior probabilities across multiple model completions.
-        Uses hybrid weighting:
-        - Logprob-based when available
-        - Semantic similarity-based when unavailable
-        - Uniform fallback otherwise
+        Cluster semantically equivalent responses using hierarchical clustering.
+        
+        Args:
+            texts: List of response texts
+            embeddings: Sentence embeddings tensor
+            threshold: Similarity threshold for considering responses equivalent (0-1)
+        
+        Returns:
+            labels: Cluster label for each response
+        """
+        if len(texts) == 1:
+            return np.array([0])
+        
+        # Compute pairwise similarities and convert to distances
+        sim_matrix = util.cos_sim(embeddings, embeddings).cpu().numpy()
+        dist_matrix = 1 - sim_matrix
+        
+        # Use agglomerative clustering with complete linkage
+        clustering = AgglomerativeClustering(
+            n_clusters=None,
+            distance_threshold=1 - threshold,
+            metric='precomputed',
+            linkage='complete'
+        )
+        labels = clustering.fit_predict(dist_matrix)
+        return labels
+    
+    @staticmethod
+    def calculate_posterior(responses: List[Dict[str, Any]],
+                          cluster_threshold: float = 0.85) -> Dict[str, float]:
+        """
+        Calculate posterior probabilities with semantic clustering.
+        
+        Key improvements:
+        1. Cluster semantically equivalent responses FIRST
+        2. Aggregate logprobs/weights within clusters
+        3. Assign probability mass to clusters, not individual responses
         """
         # Normalize input
         if isinstance(responses[0], str):
             texts = responses
-            logprobs = None
+            logprobs = [None] * len(texts)
         elif isinstance(responses[0], dict):
             texts = [r.get("text", "") for r in responses]
-            logprobs = [r.get("avg_logprob") for r in responses if "avg_logprob" in r]
+            logprobs = [r.get("avg_logprob") for r in responses]
         else:
-            raise TypeError("Unsupported response format. Must be list of str or list of dicts.")
-
-        # 1️⃣ Case A: Logprob-based weighting (preferred)
-        logprobs = [r.get("avg_logprob") for r in responses if "avg_logprob" in r]
-        if logprobs and all(lp is not None for lp in logprobs):
-            logprobs = np.array(logprobs)
-            exp_probs = np.exp(logprobs - np.max(logprobs))  # numerical stability
-            probs = exp_probs / exp_probs.sum()
-            posterior = dict(zip(texts, probs.tolist()))
-            return posterior
-
-        # 2️⃣ Case B: Semantic similarity weighting
-        if len(texts) > 1:
-            embeddings = embedder.encode(texts, convert_to_tensor=True)
-            mean_embedding = embeddings.mean(dim=0, keepdim=True)
-            similarities = util.cos_sim(embeddings, mean_embedding).squeeze().cpu().numpy()
-            exp_probs = np.exp(similarities - np.max(similarities))
-            probs = exp_probs / exp_probs.sum()
-            posterior = dict(zip(texts, probs.tolist()))
-            return posterior
-
-        # 3️⃣ Case C: Fallback — uniform weighting
-        probs = np.ones(len(texts)) / len(texts)
-        return dict(zip(texts, probs.tolist()))
-
+            raise TypeError("Unsupported response format")
+        
+        # Step 1: Cluster semantically equivalent responses
+        embeddings = embedder.encode(texts, convert_to_tensor=True)
+        cluster_labels = UncertaintyAnalyzer.cluster_equivalent_responses(
+            texts, embeddings, threshold=cluster_threshold
+        )
+        
+        # Step 2: Aggregate within clusters
+        n_clusters = len(set(cluster_labels))
+        cluster_weights = np.zeros(n_clusters)
+        cluster_to_canonical = {}  # Map cluster ID to representative text
+        
+        # Case A: Use logprobs if available for all responses
+        if all(lp is not None for lp in logprobs):
+            # Convert logprobs to unnormalized weights
+            lp_array = np.array(logprobs)
+            weights = np.exp(lp_array - lp_array.max())  # Numerical stability
+            
+            # Aggregate weights within each cluster
+            for cluster_id in range(n_clusters):
+                mask = cluster_labels == cluster_id
+                cluster_weights[cluster_id] = weights[mask].sum()
+                # Pick the response with highest logprob as canonical
+                cluster_indices = np.where(mask)[0]
+                best_idx = cluster_indices[np.argmax(lp_array[mask])]
+                cluster_to_canonical[cluster_id] = texts[best_idx]
+        
+        # Case B: Use semantic similarity to centroid
+        else:
+            for cluster_id in range(n_clusters):
+                mask = cluster_labels == cluster_id
+                cluster_embeddings = embeddings[mask]
+                
+                # Compute centroid of cluster
+                centroid = cluster_embeddings.mean(dim=0, keepdim=True)
+                
+                # Weight by similarity to centroid
+                similarities = util.cos_sim(cluster_embeddings, centroid).squeeze()
+                if similarities.dim() == 0:  # Single element cluster
+                    similarities = similarities.unsqueeze(0)
+                
+                cluster_weights[cluster_id] = similarities.sum().cpu().item()
+                
+                # Pick most central response as canonical
+                cluster_indices = np.where(mask)[0]
+                best_idx = cluster_indices[similarities.argmax().cpu().item()]
+                cluster_to_canonical[cluster_id] = texts[best_idx]
+        
+        # Step 3: Normalize to get probabilities
+        cluster_probs = cluster_weights / cluster_weights.sum()
+        
+        # Step 4: Build posterior with canonical texts
+        posterior = {}
+        for cluster_id in range(n_clusters):
+            canonical_text = cluster_to_canonical[cluster_id]
+            posterior[canonical_text] = float(cluster_probs[cluster_id])
+        
+        return posterior
+    
     @staticmethod
     def compute_entropy(posterior: Dict[str, float]) -> float:
         """Compute Shannon entropy (bits) from posterior probabilities."""
         probs = np.array(list(posterior.values()))
-        probs = probs[probs > 0]
+        probs = probs[probs > 0]  # Filter zero probabilities
+        
+        if len(probs) == 0:
+            return 0.0
+        
         entropy = -np.sum(probs * np.log2(probs))
         return float(entropy)
     
@@ -105,38 +178,34 @@ class UncertaintyAnalyzer:
             "uncertainty_description": uncertainty_desc if uncertainty_desc is not None else default_uncertainty
         }
 
-
-# completions = [
-# """To remove nails, you would typically use a hammer with a claw. In the images, the hammer is located at the bottom left.
-
-# - The hammer is marked with ID 16.
-
-# My final answer is: [16]"""
-# ,
-# """To remove nails, you would typically use a hammer with a claw. In the images, the hammer is located at the bottom left.
-
-# - The hammer is labeled with ID 16.
-
-# My final answer is: [16]"""
-# ,"""To remove nails, you would typically use a hammer with a claw. In the images, the hammer is located at the bottom left.
-
-# - The hammer is labeled with ID 16.
-
-# My final answer is: [16]""",
-
-# """To remove nails, you would typically use a hammer with a claw. In the images, the hammer is located at the bottom left.
-
-# - The hammer is labeled with ID 16.
-
-# My final answer is: [16]""", """To remove nails, you would typically use a hammer with a claw. In the images, the hammer is located at the bottom left.
-
-# - The hammer is labeled with ID 16.
-
-# My final answer is: [16]"""
-# ]
-
-# posterior = UncertaintyAnalyzer.calculate_posterior(completions)
-# H = UncertaintyAnalyzer.calculate_entropy(posterior)
-
-# print("Posterior:", posterior)
-# print(f"Entropy over completions: {H:.2f} bits")
+# if __name__ == "__main__":
+    
+#     # Case 1: Semantically identical responses (should have low entropy)
+#     responses_identical = [
+#         {"text": "The smallest object is the strawberry (Object 11). Final answer: [11]", 
+#          "avg_logprob": -0.5},
+#         {"text": "The smallest object appears to be the strawberry (Object 11). Answer: [11]", 
+#          "avg_logprob": -0.6}
+#     ]
+    
+#     posterior1 = UncertaintyAnalyzer.calculate_posterior(
+#         responses_identical
+#     )
+#     entropy1 = UncertaintyAnalyzer.compute_entropy(posterior1)
+#     print(f"Identical responses - Posterior: {posterior1}")
+#     print(f"Entropy: {entropy1:.3f} bits (should be ~0)\n")
+    
+#     # Case 2: Semantically different responses (should have higher entropy)
+#     responses_different = [
+#         {"text": "The smallest object is the strawberry (Object 11). Final answer: [11]", 
+#          "avg_logprob": -0.5},
+#         {"text": "The smallest object is the lid (Object 12). Final answer: [12]", 
+#          "avg_logprob": -0.6}
+#     ]
+    
+#     posterior2 = UncertaintyAnalyzer.calculate_posterior(
+#         responses_different, embedder
+#     )
+#     entropy2 = UncertaintyAnalyzer.compute_entropy(posterior2)
+#     print(f"Different responses - Posterior: {posterior2}")
+#     print(f"Entropy: {entropy2:.3f} bits (should be ~1)")

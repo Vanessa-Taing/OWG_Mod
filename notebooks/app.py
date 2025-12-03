@@ -37,6 +37,53 @@ custom_prompt_lib = SystemPromptLibrary(USER_PROMPT_DIR)
 default_available_prompts = default_prompt_lib.list_available_prompts()
 custom_available_prompts = custom_prompt_lib.list_available_prompts()
 
+# ADD this helper function before the tabs section (around line 60):
+def calculate_calibration_metrics(uncertainty_logs, grasp_logs):
+    """Calculate Expected Calibration Error from linked logs"""
+    # Link logs by experiment_id
+    merged = []
+    
+    for u_log in uncertainty_logs:
+        exp_id = u_log.get("experiment_id")
+        if not exp_id:
+            continue
+            
+        # Find matching grasp logs
+        matching_grasps = [g for g in grasp_logs if g.get("experiment_id") == exp_id]
+        
+        for grasp in matching_grasps:
+            # Extract confidence from uncertainty log
+            planner_meta = u_log.get("metadata", {}).get("planner", [])
+            if planner_meta:
+                confidence = planner_meta[0].get("confidence", -1)
+                if confidence != -1:
+                    merged.append({
+                        "predicted_confidence": confidence,
+                        "actual_success": 1 if grasp["success"] else 0
+                    })
+    
+    if not merged:
+        return None, None
+    
+    df = pd.DataFrame(merged)
+    
+    # Calculate ECE (Expected Calibration Error)
+    bins = np.linspace(0, 1, 11)  # 10 bins
+    df['bin'] = pd.cut(df['predicted_confidence'], bins=bins, include_lowest=True)
+    
+    calibration_data = df.groupby('bin', observed=True).agg({
+        'predicted_confidence': 'mean',
+        'actual_success': 'mean'
+    }).dropna()
+    
+    # ECE = average absolute difference between confidence and accuracy
+    if len(calibration_data) > 0:
+        ece = np.abs(calibration_data['predicted_confidence'] - calibration_data['actual_success']).mean()
+    else:
+        ece = None
+    
+    return calibration_data, ece
+
 st.set_page_config(page_title="OWG Experiment Dashboard", layout="wide")
 st.title("🧠 Open World Grasping — LLM Experiment Dashboard")
 
@@ -330,7 +377,7 @@ with tabs[3]:
             logs = [json.loads(line) for line in f if line.strip()]
         df_uncert = pd.json_normalize(logs, sep="_")
 
-        st.write("Detected columns:", list(df_uncert.columns))
+        # st.write("Detected columns:", list(df_uncert.columns))
 
         # ---- Helper function to extract entropy & confidence ----
         def extract_values(metadata):
@@ -483,6 +530,54 @@ with tabs[3]:
                 .round(5)
             )
             st.dataframe(summary, width='stretch')
+
+            # ADD this new section (Calibration Analysis) after Summary Stats:
+            st.markdown("---")
+            st.subheader("🎯 Calibration Analysis")
+            
+            # Load grasp logs for linking
+            if os.path.exists(METRICS_PATH):
+                with open(METRICS_PATH, "r") as f:
+                    grasp_logs = [json.loads(line) for line in f if line.strip()]
+                
+                calibration_data, ece = calculate_calibration_metrics(logs, grasp_logs)
+                
+                if calibration_data is not None and len(calibration_data) > 0:
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if ece is not None:
+                            st.metric("Expected Calibration Error (ECE)", f"{ece:.3f}",
+                                    help="Lower is better. Perfect calibration = 0.0")
+                    
+                    with col2:
+                        st.metric("Calibration Data Points", len(calibration_data))
+                    
+                    # Reliability diagram
+                    st.markdown("#### 📊 Reliability Diagram")
+                    
+                    calib_plot = calibration_data.reset_index()
+                    calib_plot['bin_center'] = calib_plot['predicted_confidence']
+                    
+                    # Line chart showing confidence vs actual accuracy
+                    chart = alt.Chart(calib_plot).mark_line(point=True).encode(
+                        x=alt.X('bin_center:Q', title='Predicted Confidence', scale=alt.Scale(domain=[0, 1])),
+                        y=alt.Y('actual_success:Q', title='Actual Success Rate', scale=alt.Scale(domain=[0, 1])),
+                        tooltip=['bin_center:Q', 'actual_success:Q']
+                    ).properties(height=300)
+                    
+                    # Add diagonal reference line (perfect calibration)
+                    reference = alt.Chart(pd.DataFrame({'x': [0, 1], 'y': [0, 1]})).mark_line(
+                        strokeDash=[5, 5], color='gray'
+                    ).encode(x='x:Q', y='y:Q')
+                    
+                    st.altair_chart(chart + reference, use_container_width=True)
+                    
+                    st.info("ℹ️ Points on the diagonal = perfect calibration. Above = overconfident. Below = underconfident.")
+                else:
+                    st.warning("⚠️ No calibration data available. Ensure experiments have confidence scores and experiment_id linking.")
+            else:
+                st.warning("⚠️ No grasp logs found for calibration analysis.")
 
             # ---- Correlation Analysis ----
             st.subheader("🔗 Entropy-Confidence Correlation")
