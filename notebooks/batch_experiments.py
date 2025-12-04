@@ -18,7 +18,7 @@ Features:
 Usage:
     python notebooks/batch_experiments.py --mode quick
     python notebooks/batch_experiments.py --mode baseline_vs_uncertainty
-    python notebooks/batch_experiments.py --mode model_comparison
+    python notebooks/batch_experiments.py --mode model_comparison --models gpt-4o gpt-4o-mini
     python notebooks/batch_experiments.py --mode full
 """
 
@@ -461,15 +461,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Quick test (2 experiments)
+  # Quick test (2 experiments --default gpt-4o)
   python notebooks/batch_experiments.py --mode quick
   
   # Baseline vs uncertainty comparison (40 experiments)
   python notebooks/batch_experiments.py --mode baseline_vs_uncertainty
   
   # Model comparison GPT-4o vs GPT-4o-mini (40 experiments)
-  python notebooks/batch_experiments.py --mode model_comparison
-  
+  python notebooks/batch_experiments.py --mode model_comparison --models gpt-4o gpt-4o-mini
+
   # Full factorial design (180 experiments)
   python notebooks/batch_experiments.py --mode full
         """
@@ -501,6 +501,13 @@ Examples:
         help="Timeout per experiment in seconds (default: 300)"
     )
     
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=["gpt-4o"],
+        help="List of model IDs to compare"
+    )
+
     args = parser.parse_args()
     
     # Create batch directory
@@ -525,28 +532,28 @@ Examples:
         queries = QUERIES[:1]
         n_objects = [12]
         prompt_types = ["baseline", "confidence"]
-        models = ["gpt-4o"]
+        models = args.models
         
     elif args.mode == "baseline_vs_uncertainty":
         seeds = SEEDS
         queries = QUERIES
         n_objects = [12]
         prompt_types = ["baseline", "confidence", "hedging", "cautious", "uncertainty_description"]
-        models = ["gpt-4o"]
+        models = args.models
         
     elif args.mode == "model_comparison":
         seeds = SEEDS
         queries = QUERIES
         n_objects = [12]
         prompt_types = ["baseline", "confidence"]
-        models = ["gpt-4o", "gpt-4o-mini"]
+        models = args.models
         
     else:  # full
         seeds = SEEDS
         queries = QUERIES
         n_objects = N_OBJECTS_RANGE
         prompt_types = list(PROMPT_CONFIGS.keys())
-        models = ["gpt-4o", "gpt-4o-mini"]
+        models = args.models
     
     # Generate all experiment combinations
     experiments = list(product(seeds, queries, n_objects, prompt_types, models))
