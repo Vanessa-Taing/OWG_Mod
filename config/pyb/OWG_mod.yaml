@@ -1,7 +1,7 @@
 # prompt_root_dir: './prompts/uncertainty_aware'
 grounding_prompt_root_dir: './prompts/uncertainty_aware'
 planning_prompt_root_dir: './prompts/uncertainty_aware'
-ranking_prompt_root_dir: './prompts/uncertainty_aware'
+grasping_prompt_root_dir: './prompts/uncertainty_aware'
 image_size_h: 448
 image_size_w: 448
 image_crop: null
@@ -104,7 +104,6 @@ grasping:
 
   prompt_name: 'grasp_ranking_uncertainty_description'
   prompt_template: "Rank the grasp poses."
-  # prompt_variants: ["_uncertainty_description"]
 
   use_3d_prompt: False
   gripper_mesh_path: 'owg_robot/assets/robotiq_2f_140/robotiq_arg2f_140.obj'

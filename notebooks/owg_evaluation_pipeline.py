@@ -4,7 +4,7 @@ OWG Evaluation Pipeline - Command Line Script
 Author: Vanessa (converted to CLI by Assistant)
 
 Usage:
-    python owg_evaluation_pipeline.py --seed 42 --config config/pyb/OWG_mod.yaml --query "Remove the smallest object"
+    python notebooks/owg_evaluation_pipeline.py --seed 42 --config config/pyb/OWG_mod.yaml --query "Remove the smallest object" --visualise-simulation False
 """
 
 import argparse
@@ -55,7 +55,7 @@ def display_image(path_or_array, size=(10, 10), save_path=None):
         print(f"Image saved to {save_path}")
     plt.close()
 
-def setup_environment(seed, n_objects=12):
+def setup_environment(seed, n_objects=12, headless=False):
     """Setup PyBullet environment with objects"""
     print("Setting up PyBullet environment...")
     
@@ -63,7 +63,7 @@ def setup_environment(seed, n_objects=12):
     center_x, center_y, center_z = CAM_X, CAM_Y, CAM_Z
     camera = Camera((center_x, center_y, center_z), (center_x, center_y, 0.785), 
                    0.2, 2.0, (448, 448), 40)
-    env = Environment(camera, vis=True, asset_root='./owg_robot/assets', 
+    env = Environment(camera, vis=not headless, asset_root='./owg_robot/assets', 
                      debug=False, finger_length=0.06)
     
     # Load objects
@@ -213,9 +213,14 @@ def main():
     parser.add_argument('--output-dir', type=str, default='output',
                        help='Directory to save output visualizations')
     parser.add_argument('--visualise-grasps', action='store_true',
-                       help='Visualize grasps in PyBullet GUI')
+                       help='visualise grasps in PyBullet GUI')
     parser.add_argument('--openai-key', type=str, default='test',
                        help='OpenAI API key (if needed)')
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run PyBullet in headless mode (no GUI)"
+    )
     
     args = parser.parse_args()
     
@@ -229,10 +234,11 @@ def main():
     print(f"Config: {args.config}")
     print(f"Query: {args.query}")
     print(f"Output directory: {args.output_dir}")
+    print("Running in headless mode" if args.headless else "Running with GUI")
     print("=" * 60)
     
     # Setup environment
-    env, camera = setup_environment(args.seed, args.n_objects)
+    env, camera = setup_environment(args.seed, args.n_objects, args.headless)
     
     # Load grasp generator
     print("\nLoading grasp generator...")
