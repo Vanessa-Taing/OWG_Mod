@@ -262,9 +262,6 @@ def main():
     grounder = VisualPrompterGrounding(args.config, debug=False)
     planner = VisualPrompterPlanning(args.config, debug=False)
     grasp_ranker = VisualPrompterGraspRanking(args.config, debug=False)
-    
-    # Initialize tracker
-    # tracker = GraspStatsTracker()
 
     experiment_id = generate_experiment_id(
         seed=args.seed,

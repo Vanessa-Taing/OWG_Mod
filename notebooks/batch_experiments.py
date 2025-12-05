@@ -21,17 +21,23 @@ Usage:
     python notebooks/batch_experiments.py --mode model_comparison --models gpt-4o gpt-4o-mini
     python notebooks/batch_experiments.py --mode full
 """
+import os
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 import argparse
 import subprocess
 import json
-import os
 import yaml
 import time
 from datetime import datetime
 from itertools import product
 from pathlib import Path
-import sys
+import re
+
+from owg_mod.model_utils_litellm import check_litellm
 
 # ============================================================================
 # EXPERIMENT CONFIGURATIONS
@@ -90,6 +96,15 @@ MODEL_CONFIGS = {
         "expected_cost_per_call": 0.0015
     }
 }
+
+# ============================================================================
+# EXPERIMENT ID EXTRACTION
+# ============================================================================
+def extract_experiment_id(stdout):
+    match = re.search(r"Experiment ID:\s*([A-Za-z0-9_\-]+)", stdout)
+    if match:
+        return match.group(1)
+    return None
 
 # ============================================================================
 # CONFIG GENERATION
@@ -315,11 +330,15 @@ def run_single_experiment(seed, query, n_objects, config_path, output_dir, timeo
                 timeout=timeout,
                 cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Run from OWG root
             )
-            
+
+            full_stdout = result.stdout
+            eid = extract_experiment_id(full_stdout)
+
             if result.returncode == 0:
                 return {
                     "success": True,
                     "attempts": attempt + 1,
+                    "experiment_id": eid,
                     "stdout": result.stdout[-500:],  # Last 500 chars
                     "stderr": ""
                 }
@@ -328,6 +347,7 @@ def run_single_experiment(seed, query, n_objects, config_path, output_dir, timeo
                     return {
                         "success": False,
                         "attempts": attempt + 1,
+                        "experiment_id": eid,
                         "stdout": result.stdout[-500:],
                         "stderr": result.stderr[-500:]
                     }
@@ -338,6 +358,7 @@ def run_single_experiment(seed, query, n_objects, config_path, output_dir, timeo
                 return {
                     "success": False,
                     "attempts": attempt + 1,
+                    "experiment_id": eid,
                     "error": f"timeout after {timeout}s"
                 }
         except Exception as e:
@@ -345,10 +366,11 @@ def run_single_experiment(seed, query, n_objects, config_path, output_dir, timeo
                 return {
                     "success": False,
                     "attempts": attempt + 1,
+                    "experiment_id": eid,
                     "error": str(e)
                 }
     
-    return {"success": False, "error": "max retries exceeded"}
+    return {"success": False, "experiment_id": eid, "error": "max retries exceeded"}
 
 # ============================================================================
 # PROGRESS TRACKING
@@ -456,6 +478,14 @@ def generate_summary_report(batch_dir):
 # ============================================================================
 
 def main():
+    status = check_litellm()
+
+    if not status["running"]:
+        print("❌ LiteLLM not running — aborting experiments.")
+        sys.exit(1)
+
+    print(f"🚀 Using LiteLLM endpoint: {status['endpoint']}")
+    
     parser = argparse.ArgumentParser(
         description="Batch experiment runner for OWG uncertainty research",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -618,6 +648,7 @@ Examples:
         
         # Log result
         result_record = {
+            "experiment_id": result.get("experiment_id", None),
             "run_id": len(completed) + idx,
             "seed": seed,
             "query": query,

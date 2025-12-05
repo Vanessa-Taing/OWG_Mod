@@ -2,6 +2,7 @@ import os
 import numpy as np
 import base64
 import requests
+from requests.exceptions import RequestException
 import json
 from io import BytesIO
 from typing import List, Union, Optional, Dict, Any
@@ -18,6 +19,67 @@ SUPPORTED_MODELS = [
 
     "gemma3:12b", "gemma3:4b", "qwen2.5vl", "minicpm-v:8b"
 ]
+
+DEFAULT_ENDPOINTS = [
+    "http://localhost:4000/health",
+    "http://localhost:4000/",
+    "http://127.0.0.1:4000/health",
+    "http://0.0.0.0:4000/health",
+    "http://0.0.0.0:4000/"
+]
+
+@staticmethod
+def check_litellm(endpoints=None, timeout=3):
+    """
+    Check if LiteLLM is running on one of the known endpoints.
+
+    Returns:
+        dict with:
+            - running: bool
+            - endpoint: str or None
+            - models: list or None
+            - error: str or None
+    """
+    endpoints = endpoints or DEFAULT_ENDPOINTS
+
+    for endpoint in endpoints:
+        try:
+            resp = requests.get(endpoint, timeout=timeout)
+
+            # LiteLLM replies 200 on /health, sometimes 404 on /
+            if resp.status_code in [200, 404]:
+                # Found a running server
+                running_endpoint = endpoint.replace("/health", "")
+                running_endpoint = running_endpoint.rstrip("/")
+
+                # Attempt to get model list
+                models = None
+                try:
+                    model_resp = requests.get(
+                        f"{running_endpoint}/v1/models", timeout=timeout
+                    )
+                    if model_resp.status_code == 200:
+                        data = model_resp.json()
+                        models = [m["id"] for m in data.get("data", [])]
+                except Exception:
+                    pass
+
+                return {
+                    "running": True,
+                    "endpoint": running_endpoint,
+                    "models": models,
+                    "error": None
+                }
+
+        except RequestException:
+            continue
+
+    return {
+        "running": False,
+        "endpoint": None,
+        "models": None,
+        "error": "LiteLLM not reachable"
+    }
 
 def encode_image_to_base64(image) -> str:
     """
