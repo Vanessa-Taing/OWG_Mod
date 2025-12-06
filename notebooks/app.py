@@ -12,14 +12,31 @@ import pandas as pd
 from datetime import datetime
 import time
 import altair as alt
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from owg_mod.prompt_library import SystemPromptLibrary
 from owg_mod.model_utils_litellm import check_litellm
+from owg_mod.app_utils import (
+    load_uncertainty_logs,
+    load_batch_logs,
+    merge_logs,
+    calculate_overall_confidence,
+    filter_dataframe,
+    calculate_success_rate,
+    perform_ttest,
+    perform_anova,
+    calculate_calibration_metrics,
+    get_significance_marker,
+    calculate_correlation
+)
 
 # Paths for metrics
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 LOG_PATH = os.path.join(BASE_DIR, "logs", "litellm_logs.jsonl")
 METRICS_PATH = os.path.join(BASE_DIR, "logs", "experiment_metrics.jsonl")
 LOG_PATH_UNCERT = os.path.join(BASE_DIR, "logs", "uncertainty_logs.jsonl")
+BATCH_EXPERIMENTS_DIR = "/home/owner/OWG/experiments"
 
 # Paths for prompts
 UNCERTAINTY_DIR = os.path.join(BASE_DIR, "prompts/uncertainty_aware")
@@ -36,53 +53,6 @@ default_prompt_lib = SystemPromptLibrary(UNCERTAINTY_DIR)
 custom_prompt_lib = SystemPromptLibrary(USER_PROMPT_DIR)
 default_available_prompts = default_prompt_lib.list_available_prompts()
 custom_available_prompts = custom_prompt_lib.list_available_prompts()
-
-# ADD this helper function before the tabs section (around line 60):
-def calculate_calibration_metrics(uncertainty_logs, grasp_logs):
-    """Calculate Expected Calibration Error from linked logs"""
-    # Link logs by experiment_id
-    merged = []
-    
-    for u_log in uncertainty_logs:
-        exp_id = u_log.get("experiment_id")
-        if not exp_id:
-            continue
-            
-        # Find matching grasp logs
-        matching_grasps = [g for g in grasp_logs if g.get("experiment_id") == exp_id]
-        
-        for grasp in matching_grasps:
-            # Extract confidence from uncertainty log
-            planner_meta = u_log.get("metadata", {}).get("planner", [])
-            if planner_meta:
-                confidence = planner_meta[0].get("confidence", -1)
-                if confidence != -1:
-                    merged.append({
-                        "predicted_confidence": confidence,
-                        "actual_success": 1 if grasp["success"] else 0
-                    })
-    
-    if not merged:
-        return None, None
-    
-    df = pd.DataFrame(merged)
-    
-    # Calculate ECE (Expected Calibration Error)
-    bins = np.linspace(0, 1, 11)  # 10 bins
-    df['bin'] = pd.cut(df['predicted_confidence'], bins=bins, include_lowest=True)
-    
-    calibration_data = df.groupby('bin', observed=True).agg({
-        'predicted_confidence': 'mean',
-        'actual_success': 'mean'
-    }).dropna()
-    
-    # ECE = average absolute difference between confidence and accuracy
-    if len(calibration_data) > 0:
-        ece = np.abs(calibration_data['predicted_confidence'] - calibration_data['actual_success']).mean()
-    else:
-        ece = None
-    
-    return calibration_data, ece
 
 st.set_page_config(page_title="OWG Experiment Dashboard", layout="wide")
 st.title("🧠 Open World Grasping — LLM Experiment Dashboard")
@@ -369,968 +339,659 @@ with tabs[2]:
 
 # 📊 Refined Uncertainty Analysis Dashboard with Statistical Tests
 with tabs[3]:
-    st.header("🧠 Uncertainty Analysis")
+    st.set_page_config(page_title="Uncertainty Analysis Dashboard", layout="wide")
     
-    # ========== LOAD DATA ==========
-    uncertainty_logs_exist = os.path.exists(LOG_PATH_UNCERT)
-    grasp_logs_exist = os.path.exists(METRICS_PATH)
+    st.title("🎯 Uncertainty Analysis Dashboard")
+    st.markdown("*Open World Grasping (OWG) Project - Uncertainty Estimation Module*")
     
-    if not uncertainty_logs_exist:
-        st.info("📭 No uncertainty logs found. Run experiments to generate data.")
-        st.code("python notebooks/owg_evaluation_pipeline.py --seed 42 --query 'pick smallest' --n-objects 12")
-    else:
-        # Load logs
-        with open(LOG_PATH_UNCERT, "r") as f:
-            uncertainty_logs = [json.loads(line) for line in f if line.strip()]
+    # Load data
+    with st.spinner("Loading data..."):
+        uncertainty_df = load_uncertainty_logs()
+        batch_df = load_batch_logs()
         
-        grasp_logs = []
-        if grasp_logs_exist:
-            with open(METRICS_PATH, "r") as f:
-                grasp_logs = [json.loads(line) for line in f if line.strip()]
+        if uncertainty_df.empty:
+            st.error("No uncertainty logs found at ~/OWG/logs/uncertainty_logs.jsonl")
         
-        if not uncertainty_logs:
-            st.info("📭 Empty uncertainty logs.")
-        else:
-            # ========== SIDEBAR FILTERS ==========
-            with st.sidebar:
-                st.markdown("---")
-                st.markdown("### 🔍 Uncertainty Filters")
-                
-                # Extract unique values
-                all_exp_groups = sorted(set(log.get("experiment_group", "unknown") for log in uncertainty_logs))
-                all_exp_ids = sorted(set(log.get("experiment_id", "unknown") for log in uncertainty_logs))
-                
-                # Batch experiment detection
-                batch_experiments = {}
-                for exp_id in all_exp_ids:
-                    # Extract batch name from experiment_id pattern: YYYYMMDD_hash_seed
-                    parts = exp_id.split('_')
-                    if len(parts) >= 2:
-                        batch_key = f"{parts[0]}_{parts[1]}"  # date_hash
-                        if batch_key not in batch_experiments:
-                            batch_experiments[batch_key] = []
-                        batch_experiments[batch_key].append(exp_id)
-                
-                # Batch filter
-                st.markdown("#### 📦 Filter by Batch")
-                if len(batch_experiments) > 1:
-                    batch_options = ["All Batches"] + list(batch_experiments.keys())
-                    selected_batch = st.selectbox(
-                        "Select batch experiment",
-                        options=batch_options,
-                        help="Experiments grouped by date and config"
-                    )
-                    
-                    if selected_batch != "All Batches":
-                        filtered_exp_ids = batch_experiments[selected_batch]
-                        st.info(f"📊 {len(filtered_exp_ids)} experiments in this batch")
-                    else:
-                        filtered_exp_ids = all_exp_ids
-                else:
-                    st.info(f"📊 {len(all_exp_ids)} total experiments")
-                    filtered_exp_ids = all_exp_ids
-                
-                # Experiment group filter
-                st.markdown("#### 🏷️ Experiment Type")
-                selected_groups = st.multiselect(
-                    "Experiment Group",
-                    options=all_exp_groups,
-                    default=all_exp_groups,
-                    help="Baseline vs uncertainty-aware prompts"
+        # Merge datasets
+        df = merge_logs(uncertainty_df, batch_df)
+        df = calculate_overall_confidence(df)
+    
+    # ===== FILTER PANEL =====
+    with st.expander("🔍 **Advanced Filters**", expanded=True):
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            # Batch ID filter
+            batch_ids = ['All'] + sorted([b for b in df['batch_id'].dropna().unique()])
+            selected_batches = st.multiselect(
+                "Batch ID",
+                options=batch_ids,
+                default=['All']
+            )
+            
+            # Experiment Group filter
+            exp_groups = df['experiment_group'].dropna().unique().tolist()
+            selected_groups = st.multiselect(
+                "Experiment Group",
+                options=exp_groups,
+                default=exp_groups
+            )
+        
+        with col2:
+            # Prompt Type filter
+            prompt_types = df['prompt_type'].dropna().unique().tolist()
+            selected_prompts = st.multiselect(
+                "Prompt Type",
+                options=prompt_types,
+                default=prompt_types
+            )
+            
+            # Model Name filter
+            all_models = set()
+            for col in ['grounder_model', 'planner_model', 'ranker_model']:
+                all_models.update(df[col].dropna().unique())
+            selected_models = st.multiselect(
+                "Model Name",
+                options=sorted(all_models),
+                default=sorted(all_models)
+            )
+        
+        with col3:
+            # Model Category filter
+            model_cats = df['model_category'].dropna().unique().tolist()
+            selected_categories = st.multiselect(
+                "Model Category",
+                options=model_cats,
+                default=model_cats
+            )
+            
+            # Success filter
+            success_filter = st.selectbox(
+                "Success Status",
+                options=['All', 'Success', 'Failure'],
+                index=0
+            )
+        
+        with col4:
+            # Date range filter
+            if 'date' in df.columns and not df['date'].isna().all():
+                min_date = df['date'].min()
+                max_date = df['date'].max()
+                date_range = st.date_input(
+                    "Date Range",
+                    value=(min_date, max_date),
+                    min_value=min_date,
+                    max_value=max_date
                 )
-                
-                # Individual experiment filter
-                st.markdown("#### 🔬 Individual Experiments")
-                available_exp_ids = [eid for eid in filtered_exp_ids 
-                                    if any(log.get("experiment_id") == eid and 
-                                          log.get("experiment_group") in selected_groups 
-                                          for log in uncertainty_logs)]
-                
-                if len(available_exp_ids) > 10:
-                    use_all = st.checkbox("Select all experiments", value=True)
-                    if use_all:
-                        selected_ids = available_exp_ids
-                    else:
-                        selected_ids = st.multiselect(
-                            "Select specific experiments",
-                            options=available_exp_ids,
-                            default=available_exp_ids[:5],
-                            help="Choose individual experiment IDs"
-                        )
-                else:
-                    selected_ids = st.multiselect(
-                        "Select experiments",
-                        options=available_exp_ids,
-                        default=available_exp_ids,
-                        help="Choose experiment IDs to analyze"
-                    )
-                
-                st.markdown("---")
-            
-            # Filter logs based on selections
-            filtered_uncertainty = [
-                log for log in uncertainty_logs
-                if log.get("experiment_group") in selected_groups
-                and log.get("experiment_id") in selected_ids
-            ]
-            
-            filtered_grasp = [
-                log for log in grasp_logs
-                if log.get("experiment_group") in selected_groups
-                and log.get("experiment_id") in selected_ids
-            ]
-            
-            if not filtered_uncertainty:
-                st.warning("⚠️ No logs match your filters. Adjust sidebar settings.")
             else:
-                # ========== OVERVIEW METRICS ==========
-                st.subheader("📊 Overview")
+                date_range = None
+            
+            # Number of objects range
+            if 'n_objects' in df.columns and not df['n_objects'].isna().all():
+                min_obj = int(df['n_objects'].min())
+                max_obj = int(df['n_objects'].max())
                 
-                col1, col2, col3, col4 = st.columns(4)
+                # Only show slider if there's a range
+                if min_obj < max_obj:
+                    n_objects_range = st.slider(
+                        "Number of Objects",
+                        min_value=min_obj,
+                        max_value=max_obj,
+                        value=(min_obj, max_obj)
+                    )
+                else:
+                    # If all values are the same, just display it
+                    st.info(f"Number of Objects: {min_obj}")
+                    n_objects_range = (min_obj, max_obj)
+            else:
+                n_objects_range = None
+        
+        # Query search
+        query_search = st.text_input("🔎 Search Query Text", "")
+    
+    # Apply filters
+    filters = {
+        'batch_ids': None if 'All' in selected_batches else selected_batches,
+        'experiment_groups': selected_groups,
+        'prompt_types': selected_prompts,
+        'model_names': selected_models,
+        'model_categories': selected_categories,
+        'success_filter': success_filter,
+        'date_range': date_range if date_range and len(date_range) == 2 else None,
+        'n_objects_range': n_objects_range,
+        'query_search': query_search if query_search else None
+    }
+    
+    filtered_df = filter_dataframe(df, filters)
+    
+    if filtered_df.empty:
+        st.warning("No data matches the selected filters.")
+    
+    st.success(f"**{len(filtered_df)}** experiments loaded (filtered from {len(df)} total)")
+    
+    # ===== SECTION A: KEY METRICS OVERVIEW =====
+    st.markdown("---")
+    st.header("📊 Key Metrics Overview")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        total_experiments = len(filtered_df)
+        st.metric("Total Experiments", f"{total_experiments:,}")
+    
+    with col2:
+        if 'success' in filtered_df.columns:
+            success_rate = filtered_df['success'].mean() * 100
+            st.metric("Success Rate", f"{success_rate:.1f}%")
+        else:
+            st.metric("Success Rate", "N/A")
+    
+    with col3:
+        if 'overall_confidence' in filtered_df.columns:
+            avg_confidence = filtered_df['overall_confidence'].mean()
+            st.metric("Avg Confidence", f"{avg_confidence:.3f}")
+        else:
+            st.metric("Avg Confidence", "N/A")
+    
+    with col4:
+        if 'attempts' in filtered_df.columns:
+            avg_attempts = filtered_df['attempts'].mean()
+            st.metric("Avg Attempts", f"{avg_attempts:.2f}")
+        else:
+            st.metric("Avg Attempts", "N/A")
+    
+    with col5:
+        unique_batches = filtered_df['batch_id'].dropna().unique() if 'batch_id' in filtered_df.columns else []
+        st.metric("Unique Batches", len(unique_batches))
+    
+    # ===== SECTION B: PRIORITY ANALYSIS =====
+    st.markdown("---")
+    st.header("🎯 Priority Analysis")
+    
+    # B1: Success Rate vs Confidence Correlation
+    st.subheader("1️⃣ Success Rate vs Confidence Correlation")
+
+    if 'success' in filtered_df.columns and 'overall_confidence' in filtered_df.columns:
+        # Filter out invalid confidence values and ensure clean data
+        plot_df = filtered_df[
+            (filtered_df['overall_confidence'].notna()) & 
+            (filtered_df['overall_confidence'] >= 0) &  # Remove -1 and negative values
+            (filtered_df['overall_confidence'] <= 1) &  # Ensure within valid range
+            (filtered_df['success'].notna())
+        ].copy()
+        
+        # Convert success to numeric (0 or 1)
+        plot_df['success_numeric'] = plot_df['success'].astype(int)
+        
+        if len(plot_df) > 0:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                # Scatter plot
+                fig = px.scatter(
+                    plot_df,
+                    x='overall_confidence',
+                    y='success_numeric',
+                    color='experiment_group' if 'experiment_group' in plot_df.columns else None,
+                    hover_data=['experiment_id', 'prompt_type', 'model_category'],
+                    title="Success vs Overall Confidence",
+                    labels={'overall_confidence': 'Overall Confidence', 'success_numeric': 'Success (0=Fail, 1=Success)'},
+                    trendline="ols"
+                )
+                fig.update_layout(height=400)
+                fig.update_yaxes(range=[-0.1, 1.1])  # Fix y-axis range
+                fig.update_xaxes(range=[0, 1])  # Fix x-axis range
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                # Correlation statistics
+                corr, p_value = calculate_correlation(plot_df, 'overall_confidence', 'success_numeric')
                 
-                baseline_count = sum(1 for log in filtered_uncertainty if log.get("experiment_group") == "baseline")
-                uncertainty_count = sum(1 for log in filtered_uncertainty if log.get("experiment_group") == "uncertainty_aware")
+                st.markdown("**Correlation Statistics:**")
+                st.metric("Pearson r", f"{corr:.3f}" if not np.isnan(corr) else "N/A")
+                st.metric("p-value", f"{p_value:.4f}" if not np.isnan(p_value) else "N/A")
+                st.metric("Significance", get_significance_marker(p_value))
                 
-                col1.metric("Total Experiments", len(filtered_uncertainty))
-                col2.metric("Baseline Runs", baseline_count)
-                col3.metric("Uncertainty-Aware", uncertainty_count)
-                col4.metric("Grasp Attempts", len(filtered_grasp) if filtered_grasp else "N/A")
+                if not np.isnan(corr):
+                    if abs(corr) < 0.3:
+                        strength = "weak"
+                    elif abs(corr) < 0.7:
+                        strength = "moderate"
+                    else:
+                        strength = "strong"
+                    st.info(f"Correlation is **{strength}** and **{get_significance_marker(p_value) if p_value < 0.05 else 'not significant'}**")
+        else:
+            st.warning("No valid data available after filtering invalid confidence values")
+    else:
+        st.info("Success or confidence data not available")
+    
+    # B2: Performance by Model Type
+    st.subheader("2️⃣ Performance by Model Type")
+    
+    if 'model_category' in filtered_df.columns:
+        model_perf = calculate_success_rate(filtered_df, 'model_category')
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Success rate by model category
+            fig = px.bar(
+                model_perf,
+                x='model_category',
+                y='success_rate',
+                text='success_rate',
+                title="Success Rate by Model Category",
+                labels={'model_category': 'Model Category', 'success_rate': 'Success Rate'}
+            )
+            fig.update_traces(texttemplate='%{text:.1%}', textposition='outside')
+            fig.update_layout(height=400, yaxis_range=[0, 1.1])
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Confidence by model category
+            if 'overall_confidence' in filtered_df.columns:
+                conf_by_model = filtered_df.groupby('model_category')['overall_confidence'].agg(['mean', 'std', 'count']).reset_index()
                 
-                # Success rate comparison if grasp data available
-                if filtered_grasp:
-                    st.markdown("---")
-                    col1, col2, col3 = st.columns(3)
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=conf_by_model['model_category'],
+                    y=conf_by_model['mean'],
+                    error_y=dict(type='data', array=conf_by_model['std']),
+                    text=conf_by_model['mean'],
+                    texttemplate='%{text:.3f}',
+                    textposition='outside'
+                ))
+                fig.update_layout(
+                    title="Average Confidence by Model Category",
+                    xaxis_title="Model Category",
+                    yaxis_title="Average Confidence",
+                    height=400,
+                    yaxis_range=[0, 1.1]
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Confidence data not available")
+        
+        # Show detailed statistics
+        st.dataframe(model_perf, use_container_width=True)
+    else:
+        st.info("Model category data not available")
+    
+    # B3: Uncertainty Calibration Metrics
+    st.subheader("3️⃣ Uncertainty Calibration Metrics")
+    
+    calibration = calculate_calibration_metrics(filtered_df)
+    
+    if calibration:
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # Calibration curve
+            bin_data = pd.DataFrame(calibration['bin_data'])
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=bin_data['confidence'],
+                y=bin_data['accuracy'],
+                mode='markers+lines',
+                name='Calibration',
+                marker=dict(size=bin_data['count'] / bin_data['count'].max() * 30),
+                hovertemplate='Confidence: %{x:.2f}<br>Accuracy: %{y:.2f}<br>Count: %{marker.size:.0f}<extra></extra>'
+            ))
+            fig.add_trace(go.Scatter(
+                x=[0, 1],
+                y=[0, 1],
+                mode='lines',
+                name='Perfect Calibration',
+                line=dict(dash='dash', color='gray')
+            ))
+            fig.update_layout(
+                title="Calibration Curve",
+                xaxis_title="Predicted Confidence",
+                yaxis_title="Actual Accuracy",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.markdown("**Calibration Metrics:**")
+            st.metric("ECE (Expected Calibration Error)", f"{calibration['ece']:.4f}")
+            st.metric("MCE (Max Calibration Error)", f"{calibration['mce']:.4f}")
+            st.metric("Brier Score", f"{calibration['brier_score']:.4f}")
+            
+            st.info("Lower values indicate better calibration")
+    else:
+        st.info("Insufficient data for calibration analysis")
+    
+    # ===== SECTION C: CRITICAL COMPARISONS WITH STATISTICAL TESTS =====
+    st.markdown("---")
+    st.header("📈 Critical Comparisons & Statistical Tests")
+    
+    # C1: Uncertainty-aware vs Baseline
+    st.subheader("1️⃣ Uncertainty-Aware vs Baseline Experiments")
+    
+    if 'experiment_group' in filtered_df.columns and 'overall_confidence' in filtered_df.columns:
+        groups = filtered_df['experiment_group'].unique()
+        
+        if len(groups) >= 2:
+            # Let user select two groups to compare
+            col1, col2 = st.columns(2)
+            with col1:
+                group1_name = st.selectbox("Select Group 1", options=groups, index=0)
+            with col2:
+                group2_name = st.selectbox("Select Group 2", options=groups, index=min(1, len(groups)-1))
+            
+            if group1_name != group2_name:
+                group1_data = filtered_df[filtered_df['experiment_group'] == group1_name]
+                group2_data = filtered_df[filtered_df['experiment_group'] == group2_name]
+                
+                # Comparison metrics
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.markdown(f"**{group1_name}**")
+                    if 'success' in group1_data.columns:
+                        sr1 = group1_data['success'].mean() * 100
+                        st.metric("Success Rate", f"{sr1:.1f}%")
+                    conf1 = group1_data['overall_confidence'].mean()
+                    st.metric("Avg Confidence", f"{conf1:.3f}")
+                    st.metric("N", len(group1_data))
+                
+                with col2:
+                    st.markdown(f"**{group2_name}**")
+                    if 'success' in group2_data.columns:
+                        sr2 = group2_data['success'].mean() * 100
+                        st.metric("Success Rate", f"{sr2:.1f}%")
+                    conf2 = group2_data['overall_confidence'].mean()
+                    st.metric("Avg Confidence", f"{conf2:.3f}")
+                    st.metric("N", len(group2_data))
+                
+                with col3:
+                    st.markdown("**Statistical Test**")
                     
-                    total_success = sum(1 for g in filtered_grasp if g.get("success"))
-                    total_grasps = len(filtered_grasp)
-                    overall_success = total_success / total_grasps * 100 if total_grasps > 0 else 0
+                    # T-test on confidence
+                    stat, p_val, test_type = perform_ttest(
+                        group1_data['overall_confidence'],
+                        group2_data['overall_confidence']
+                    )
                     
-                    baseline_grasps = [g for g in filtered_grasp if g.get("experiment_group") == "baseline"]
-                    uncertainty_grasps = [g for g in filtered_grasp if g.get("experiment_group") == "uncertainty_aware"]
-                    
-                    baseline_success = sum(1 for g in baseline_grasps if g.get("success")) / len(baseline_grasps) * 100 if baseline_grasps else 0
-                    uncertainty_success = sum(1 for g in uncertainty_grasps if g.get("success")) / len(uncertainty_grasps) * 100 if uncertainty_grasps else 0
-                    
-                    col1.metric("Overall Success Rate", f"{overall_success:.1f}%")
-                    col2.metric("Baseline Success", f"{baseline_success:.1f}%")
-                    col3.metric("Uncertainty Success", f"{uncertainty_success:.1f}%", 
-                               delta=f"{uncertainty_success - baseline_success:+.1f}%")
+                    st.metric("Test Type", test_type)
+                    st.metric("p-value", f"{p_val:.4f}" if not np.isnan(p_val) else "N/A")
+                    st.metric("Significance", get_significance_marker(p_val))
                 
-                st.markdown("---")
-                
-                # ========== ANALYSIS TABS ==========
-                analysis_tabs = st.tabs([
-                    "📈 Trends & Patterns",
-                    "🎯 Calibration Analysis",
-                    "📊 Statistical Tests",
-                    "🏆 Leaderboard",
-                    "📋 Raw Data"
+                # Visualization
+                comparison_data = pd.concat([
+                    group1_data[['overall_confidence']].assign(group=group1_name),
+                    group2_data[['overall_confidence']].assign(group=group2_name)
                 ])
                 
-                # ========== TAB 1: TRENDS & PATTERNS ==========
-                with analysis_tabs[0]:
-                    st.markdown("### Uncertainty Metrics Over Time")
-                    
-                    # Extract and normalize data
-                    df_uncert = pd.json_normalize(filtered_uncertainty, sep="_")
-                    
-                    if "timestamp" in df_uncert.columns:
-                        df_uncert["timestamp"] = pd.to_datetime(df_uncert["timestamp"], errors="coerce")
-                    
-                    # Helper function to extract entropy & confidence
-                    def extract_values(metadata):
-                        out = {}
-                        if isinstance(metadata, dict):
-                            for key, val in metadata.items():
-                                if isinstance(val, list):
-                                    entropies = [x.get("entropy") for x in val if isinstance(x, dict) and "entropy" in x]
-                                    confidences = [
-                                        (x.get("confidence") if x.get("confidence") != -1 else np.nan)
-                                        for x in val if isinstance(x, dict) and "confidence" in x
-                                    ]
-                                    if entropies:
-                                        out[f"{key}_entropy"] = np.mean(entropies)
-                                    if confidences:
-                                        out[f"{key}_confidence"] = np.nanmean(confidences)
-                        return out
-                    
-                    # Extract metrics
-                    metadata_cols = [c for c in df_uncert.columns if c.startswith("metadata_")]
-                    all_rows = []
-                    
-                    for i, row in df_uncert.iterrows():
-                        merged = {
-                            "timestamp": row["timestamp"],
-                            "experiment_group": row.get("experiment_group", "unknown")
-                        }
-                        for col in metadata_cols:
-                            values = extract_values(row[col])
-                            for k, v in values.items():
-                                merged[f"{col.replace('metadata_', '')}_{k}"] = v
-                        all_rows.append(merged)
-                    
-                    df_metrics = pd.DataFrame(all_rows)
-                    
-                    if not df_metrics.empty and "timestamp" in df_metrics.columns:
-                        entropy_cols = [c for c in df_metrics.columns if c.endswith("_entropy")]
-                        conf_cols = [c for c in df_metrics.columns if c.endswith("_confidence")]
-                        
-                        # Create visualizations
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.markdown("#### 🔵 Entropy Trends")
-                            if entropy_cols:
-                                melted_entropy = df_metrics.melt(
-                                    id_vars=["timestamp", "experiment_group"],
-                                    value_vars=entropy_cols,
-                                    var_name="metric",
-                                    value_name="value"
-                                )
-                                
-                                chart_entropy = (
-                                    alt.Chart(melted_entropy.dropna(subset=['value']))
-                                    .mark_line(point=True, opacity=0.7)
-                                    .encode(
-                                        x=alt.X("timestamp:T", title="Time"),
-                                        y=alt.Y("value:Q", title="Entropy (bits)", scale=alt.Scale(domain=[0, 1.5])),
-                                        color=alt.Color("metric:N", legend=alt.Legend(title="Metric")),
-                                        strokeDash=alt.StrokeDash("experiment_group:N", legend=alt.Legend(title="Group")),
-                                        tooltip=["timestamp:T", "metric:N", "value:Q", "experiment_group:N"]
-                                    )
-                                    .properties(height=300)
-                                    .interactive()
-                                )
-                                st.altair_chart(chart_entropy, use_container_width=True)
-                                
-                                # Summary stats
-                                st.markdown("**Summary Statistics:**")
-                                for col in entropy_cols:
-                                    mean_val = df_metrics[col].mean()
-                                    std_val = df_metrics[col].std()
-                                    st.text(f"{col}: μ={mean_val:.3f}, σ={std_val:.3f}")
-                            else:
-                                st.info("No entropy data available")
-                        
-                        with col2:
-                            st.markdown("#### 🟢 Confidence Trends")
-                            if conf_cols:
-                                melted_conf = df_metrics.melt(
-                                    id_vars=["timestamp", "experiment_group"],
-                                    value_vars=conf_cols,
-                                    var_name="metric",
-                                    value_name="value"
-                                )
-                                
-                                chart_conf = (
-                                    alt.Chart(melted_conf.dropna(subset=['value']))
-                                    .mark_line(point=True, opacity=0.7)
-                                    .encode(
-                                        x=alt.X("timestamp:T", title="Time"),
-                                        y=alt.Y("value:Q", title="Confidence", scale=alt.Scale(domain=[0, 1])),
-                                        color=alt.Color("metric:N", legend=alt.Legend(title="Metric")),
-                                        strokeDash=alt.StrokeDash("experiment_group:N", legend=alt.Legend(title="Group")),
-                                        tooltip=["timestamp:T", "metric:N", "value:Q", "experiment_group:N"]
-                                    )
-                                    .properties(height=300)
-                                    .interactive()
-                                )
-                                st.altair_chart(chart_conf, use_container_width=True)
-                                
-                                # Summary stats
-                                st.markdown("**Summary Statistics:**")
-                                for col in conf_cols:
-                                    mean_val = df_metrics[col].mean()
-                                    std_val = df_metrics[col].std()
-                                    st.text(f"{col}: μ={mean_val:.3f}, σ={std_val:.3f}")
-                            else:
-                                st.info("No confidence data available")
-                        
-                        # Correlation heatmap
-                        st.markdown("---")
-                        st.markdown("### 🔗 Metric Correlations")
-                        
-                        corr_cols = entropy_cols + conf_cols
-                        if len(corr_cols) >= 2:
-                            corr_data = df_metrics[corr_cols].dropna()
-                            if len(corr_data) > 1:
-                                corr_matrix = corr_data.corr()
-                                
-                                corr_reset = corr_matrix.reset_index().melt(id_vars='index')
-                                corr_reset.columns = ['Variable 1', 'Variable 2', 'Correlation']
-                                
-                                heatmap = alt.Chart(corr_reset).mark_rect().encode(
-                                    x=alt.X('Variable 1:N', title=None, axis=alt.Axis(labelAngle=-45)),
-                                    y=alt.Y('Variable 2:N', title=None),
-                                    color=alt.Color('Correlation:Q', 
-                                                   scale=alt.Scale(scheme='redblue', domain=[-1, 1]),
-                                                   legend=alt.Legend(title="Correlation")),
-                                    tooltip=['Variable 1', 'Variable 2', alt.Tooltip('Correlation:Q', format='.3f')]
-                                ).properties(height=400)
-                                
-                                st.altair_chart(heatmap, use_container_width=True)
-                    else:
-                        st.info("Insufficient data for trend analysis")
+                fig = px.box(
+                    comparison_data,
+                    x='group',
+                    y='overall_confidence',
+                    title=f"Confidence Distribution: {group1_name} vs {group2_name}",
+                    labels={'group': 'Experiment Group', 'overall_confidence': 'Overall Confidence'}
+                )
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Need at least 2 experiment groups for comparison")
+    else:
+        st.info("Experiment group or confidence data not available")
+    
+    # C2: Large VLM vs SVLM
+    st.subheader("2️⃣ Large VLM vs SVLM Performance")
+    
+    if 'model_category' in filtered_df.columns and 'overall_confidence' in filtered_df.columns:
+        model_cats = filtered_df['model_category'].unique()
+        
+        if len(model_cats) >= 2:
+            col1, col2 = st.columns(2)
+            with col1:
+                model1 = st.selectbox("Select Model Category 1", options=model_cats, index=0, key='model1')
+            with col2:
+                model2 = st.selectbox("Select Model Category 2", options=model_cats, index=min(1, len(model_cats)-1), key='model2')
+            
+            if model1 != model2:
+                model1_data = filtered_df[filtered_df['model_category'] == model1]
+                model2_data = filtered_df[filtered_df['model_category'] == model2]
                 
-                # ========== TAB 2: CALIBRATION ANALYSIS ==========
-                with analysis_tabs[1]:
-                    st.markdown("### 🎯 Expected Calibration Error (ECE)")
-                    
-                    if not filtered_grasp:
-                        st.warning("⚠️ No grasp logs available. Calibration requires linked experiment outcomes.")
-                        st.info("💡 **Tip:** Run batch experiments to generate sufficient data:\n"
-                               "```bash\npython notebooks/batch_experiments.py --mode baseline_vs_uncertainty\n```")
-                    else:
-                        # Calculate calibration
-                        calibration_data, ece = calculate_calibration_metrics(filtered_uncertainty, filtered_grasp)
-                        
-                        if calibration_data is not None and len(calibration_data) > 1:
-                            col1, col2, col3 = st.columns(3)
-                            
-                            with col1:
-                                if ece is not None:
-                                    st.metric("ECE Score", f"{ece:.3f}",
-                                             help="Expected Calibration Error: Lower is better (0 = perfect)")
-                                    
-                                    # Interpretation
-                                    if ece < 0.05:
-                                        st.success("✅ Excellent calibration")
-                                    elif ece < 0.10:
-                                        st.info("ℹ️ Good calibration")
-                                    elif ece < 0.15:
-                                        st.warning("⚠️ Moderate calibration")
-                                    else:
-                                        st.error("❌ Poor calibration")
-                            
-                            with col2:
-                                st.metric("Calibration Bins", len(calibration_data),
-                                         help="Number of confidence bins with data")
-                            
-                            with col3:
-                                # Calculate calibration bias
-                                avg_diff = (calibration_data['predicted_confidence'] - 
-                                           calibration_data['actual_success']).mean()
-                                
-                                if abs(avg_diff) < 0.05:
-                                    st.metric("Calibration Bias", "Well Calibrated ✓", 
-                                             delta=f"{avg_diff:+.3f}")
-                                elif avg_diff > 0:
-                                    st.metric("Calibration Bias", "Overconfident", 
-                                             delta=f"+{avg_diff:.3f}", delta_color="inverse")
-                                else:
-                                    st.metric("Calibration Bias", "Underconfident",
-                                             delta=f"{avg_diff:.3f}", delta_color="normal")
-                            
-                            # Reliability diagram
-                            st.markdown("---")
-                            st.markdown("#### 📊 Reliability Diagram")
-                            
-                            calib_plot = calibration_data.reset_index()
-                            calib_plot['bin_center'] = calib_plot['predicted_confidence']
-                            
-                            # Main calibration line
-                            chart = alt.Chart(calib_plot).mark_line(
-                                point=alt.OverlayMarkDef(size=100, filled=True),
-                                strokeWidth=3
-                            ).encode(
-                                x=alt.X('bin_center:Q', 
-                                       title='Predicted Confidence', 
-                                       scale=alt.Scale(domain=[0, 1]),
-                                       axis=alt.Axis(format='%')),
-                                y=alt.Y('actual_success:Q', 
-                                       title='Actual Success Rate', 
-                                       scale=alt.Scale(domain=[0, 1]),
-                                       axis=alt.Axis(format='%')),
-                                tooltip=[
-                                    alt.Tooltip('bin_center:Q', title='Confidence', format='.2%'),
-                                    alt.Tooltip('actual_success:Q', title='Success Rate', format='.2%')
-                                ]
-                            ).properties(height=400)
-                            
-                            # Perfect calibration reference line
-                            reference = alt.Chart(
-                                pd.DataFrame({'x': [0, 1], 'y': [0, 1]})
-                            ).mark_line(
-                                strokeDash=[5, 5], 
-                                color='gray',
-                                strokeWidth=2
-                            ).encode(
-                                x='x:Q', 
-                                y='y:Q'
-                            )
-                            
-                            # Combine charts
-                            final_chart = (reference + chart).configure_axis(
-                                gridOpacity=0.3
-                            ).configure_view(
-                                strokeWidth=0
-                            )
-                            
-                            st.altair_chart(final_chart, use_container_width=True)
-                            
-                            st.markdown("""
-                            **How to interpret:**
-                            - Points on the diagonal = perfect calibration
-                            - Points above diagonal = model is overconfident
-                            - Points below diagonal = model is underconfident
-                            """)
-                            
-                            # Group comparison if both baseline and uncertainty available
-                            baseline_u_logs = [log for log in filtered_uncertainty if log.get("experiment_group") == "baseline"]
-                            uncertainty_u_logs = [log for log in filtered_uncertainty if log.get("experiment_group") == "uncertainty_aware"]
-                            
-                            if baseline_u_logs and uncertainty_u_logs:
-                                st.markdown("---")
-                                st.markdown("#### 📊 Calibration by Experiment Group")
-                                
-                                baseline_calib, baseline_ece = calculate_calibration_metrics(baseline_u_logs, filtered_grasp)
-                                uncertainty_calib, uncertainty_ece = calculate_calibration_metrics(uncertainty_u_logs, filtered_grasp)
-                                
-                                col1, col2 = st.columns(2)
-                                
-                                with col1:
-                                    st.markdown("**Baseline**")
-                                    if baseline_ece is not None:
-                                        st.metric("ECE", f"{baseline_ece:.3f}")
-                                    else:
-                                        st.info("Insufficient data")
-                                
-                                with col2:
-                                    st.markdown("**Uncertainty-Aware**")
-                                    if uncertainty_ece is not None:
-                                        delta = (uncertainty_ece - baseline_ece) if baseline_ece else None
-                                        st.metric("ECE", f"{uncertainty_ece:.3f}", 
-                                                 delta=f"{delta:.3f}" if delta else None,
-                                                 delta_color="inverse")  # Lower is better
-                                    else:
-                                        st.info("Insufficient data")
-                        
-                        else:
-                            st.warning(f"⚠️ Insufficient calibration data ({len(calibration_data) if calibration_data else 0} bins)")
-                            st.info("💡 **Recommendation:** Run at least 20 experiments with varying outcomes for reliable calibration analysis.")
+                # Comparison
+                col1, col2, col3 = st.columns(3)
                 
-                # ========== TAB 3: STATISTICAL TESTS ==========
-                with analysis_tabs[2]:
-                    st.markdown("### 📊 Statistical Significance Tests")
-                    st.markdown("Determine if observed differences are statistically significant or due to random chance.")
-                    
-                    if not filtered_grasp or len(filtered_grasp) < 10:
-                        st.warning("⚠️ Insufficient data for statistical tests. Need at least 10 experiments.")
-                        st.info("💡 Run batch experiments:\n```bash\npython notebooks/batch_experiments.py --mode baseline_vs_uncertainty\n```")
-                    else:
-                        # Import scipy for statistical tests
-                        try:
-                            from scipy import stats
-                            from scipy.stats import mannwhitneyu, chi2_contingency
-                        except ImportError:
-                            st.error("❌ scipy not installed. Run: `pip install scipy`")
-                            st.stop()
-                        
-                        # Test selection
-                        test_type = st.selectbox(
-                            "Select Statistical Test",
-                            [
-                                "Success Rate Comparison (Chi-square)",
-                                "Calibration Quality (t-test)",
-                                "Model Performance (Mann-Whitney U)",
-                                "Multiple Prompt Variants (ANOVA)"
-                            ],
-                            help="Choose the appropriate test for your research question"
-                        )
-                        
-                        st.markdown("---")
-                        
-                        # ========== CHI-SQUARE TEST ==========
-                        if test_type == "Success Rate Comparison (Chi-square)":
-                            st.markdown("#### χ² Test: Success Rate Comparison")
-                            st.markdown("**Research Question:** Do baseline and uncertainty-aware prompts have significantly different success rates?")
-                            
-                            baseline_grasps = [g for g in filtered_grasp if g.get("experiment_group") == "baseline"]
-                            uncertainty_grasps = [g for g in filtered_grasp if g.get("experiment_group") == "uncertainty_aware"]
-                            
-                            if not baseline_grasps or not uncertainty_grasps:
-                                st.warning("Need both baseline and uncertainty-aware experiments")
-                            else:
-                                # Create contingency table
-                                baseline_success = sum(1 for g in baseline_grasps if g.get("success"))
-                                baseline_fail = len(baseline_grasps) - baseline_success
-                                
-                                uncertainty_success = sum(1 for g in uncertainty_grasps if g.get("success"))
-                                uncertainty_fail = len(uncertainty_grasps) - uncertainty_success
-                                
-                                contingency = np.array([
-                                    [baseline_success, baseline_fail],
-                                    [uncertainty_success, uncertainty_fail]
-                                ])
-                                
-                                # Perform chi-square test
-                                chi2, p_value, dof, expected = chi2_contingency(contingency)
-                                
-                                # Display results
-                                col1, col2, col3, col4 = st.columns(4)
-                                
-                                col1.metric("χ² Statistic", f"{chi2:.3f}")
-                                col2.metric("p-value", f"{p_value:.4f}")
-                                col3.metric("Degrees of Freedom", dof)
-                                
-                                if p_value < 0.05:
-                                    col4.metric("Result", "✅ Significant", help="p < 0.05: Reject null hypothesis")
-                                    st.success(f"**Conclusion:** The difference in success rates is statistically significant (p = {p_value:.4f})")
-                                elif p_value < 0.10:
-                                    col4.metric("Result", "⚠️ Marginal", help="0.05 < p < 0.10: Marginally significant")
-                                    st.warning(f"**Conclusion:** Marginally significant difference (p = {p_value:.4f})")
-                                else:
-                                    col4.metric("Result", "❌ Not Significant", help="p ≥ 0.05: Fail to reject null hypothesis")
-                                    st.info(f"**Conclusion:** No significant difference found (p = {p_value:.4f})")
-                                
-                                # Contingency table visualization
-                                st.markdown("**Contingency Table:**")
-                                contingency_df = pd.DataFrame(
-                                    contingency,
-                                    columns=['Success', 'Failure'],
-                                    index=['Baseline', 'Uncertainty-Aware']
-                                )
-                                st.dataframe(contingency_df, use_container_width=True)
-                                
-                                # Effect size (Cramér's V)
-                                n = contingency.sum()
-                                cramers_v = np.sqrt(chi2 / (n * (min(contingency.shape) - 1)))
-                                
-                                st.markdown(f"**Effect Size (Cramér's V):** {cramers_v:.3f}")
-                                if cramers_v < 0.1:
-                                    st.text("→ Small effect")
-                                elif cramers_v < 0.3:
-                                    st.text("→ Medium effect")
-                                else:
-                                    st.text("→ Large effect")
-                        
-                        # ========== T-TEST FOR CALIBRATION ==========
-                        elif test_type == "Calibration Quality (t-test)":
-                            st.markdown("#### t-test: Calibration Quality Comparison")
-                            st.markdown("**Research Question:** Does uncertainty-aware prompting produce better-calibrated models?")
-                            
-                            baseline_u_logs = [log for log in filtered_uncertainty if log.get("experiment_group") == "baseline"]
-                            uncertainty_u_logs = [log for log in filtered_uncertainty if log.get("experiment_group") == "uncertainty_aware"]
-                            
-                            if not baseline_u_logs or not uncertainty_u_logs:
-                                st.warning("Need both baseline and uncertainty-aware experiments")
-                            else:
-                                # Calculate ECE for each experiment
-                                baseline_eces = []
-                                for log in baseline_u_logs:
-                                    matching_grasps = [g for g in filtered_grasp if g.get("experiment_id") == log.get("experiment_id")]
-                                    if matching_grasps:
-                                        _, ece = calculate_calibration_metrics([log], matching_grasps)
-                                        if ece is not None:
-                                            baseline_eces.append(ece)
-                                
-                                uncertainty_eces = []
-                                for log in uncertainty_u_logs:
-                                    matching_grasps = [g for g in filtered_grasp if g.get("experiment_id") == log.get("experiment_id")]
-                                    if matching_grasps:
-                                        _, ece = calculate_calibration_metrics([log], matching_grasps)
-                                        if ece is not None:
-                                            uncertainty_eces.append(ece)
-                                
-                                if len(baseline_eces) < 2 or len(uncertainty_eces) < 2:
-                                    st.warning("Need at least 2 ECE values per group for t-test")
-                                else:
-                                    # Perform t-test
-                                    t_stat, p_value = stats.ttest_ind(baseline_eces, uncertainty_eces)
-                                    
-                                    # Display results
-                                    col1, col2, col3, col4 = st.columns(4)
-                                    
-                                    col1.metric("t-statistic", f"{t_stat:.3f}")
-                                    col2.metric("p-value", f"{p_value:.4f}")
-                                    col3.metric("df", len(baseline_eces) + len(uncertainty_eces) - 2)
-                                    
-                                    if p_value < 0.05:
-                                        col4.metric("Result", "✅ Significant")
-                                        st.success(f"**Conclusion:** Calibration quality differs significantly (p = {p_value:.4f})")
-                                    else:
-                                        col4.metric("Result", "❌ Not Significant")
-                                        st.info(f"**Conclusion:** No significant difference (p = {p_value:.4f})")
-                                    
-                                    # Effect size (Cohen's d)
-                                    mean_baseline = np.mean(baseline_eces)
-                                    mean_uncertainty = np.mean(uncertainty_eces)
-                                    pooled_std = np.sqrt((np.var(baseline_eces) + np.var(uncertainty_eces)) / 2)
-                                    cohens_d = (mean_uncertainty - mean_baseline) / pooled_std if pooled_std > 0 else 0
-                                    
-                                    st.markdown(f"**Effect Size (Cohen's d):** {cohens_d:.3f}")
-                                    if abs(cohens_d) < 0.2:
-                                        st.text("→ Negligible effect")
-                                    elif abs(cohens_d) < 0.5:
-                                        st.text("→ Small effect")
-                                    elif abs(cohens_d) < 0.8:
-                                        st.text("→ Medium effect")
-                                    else:
-                                        st.text("→ Large effect")
-                                    
-                                    # Box plot comparison
-                                    st.markdown("**Distribution Comparison:**")
-                                    comparison_df = pd.DataFrame({
-                                        'ECE': baseline_eces + uncertainty_eces,
-                                        'Group': ['Baseline']*len(baseline_eces) + ['Uncertainty-Aware']*len(uncertainty_eces)
-                                    })
-                                    
-                                    box_plot = alt.Chart(comparison_df).mark_boxplot(size=60).encode(
-                                    x=alt.X('Group:N', title=None),
-                                    y=alt.Y('ECE:Q', title='Expected Calibration Error', scale=alt.Scale(zero=False)),
-                                    color=alt.Color('Group:N', legend=None)
-                                    ).properties(height=300)
-                                    st.altair_chart(box_plot, use_container_width=True)
-                    
-                        # ========== MANN-WHITNEY U TEST ==========
-                        elif test_type == "Model Performance (Mann-Whitney U)":
-                            st.markdown("#### Mann-Whitney U Test: Non-parametric Model Comparison")
-                            st.markdown("**Research Question (RQ4):** Do SVLMs perform comparably to large VLMs?")
-                            
-                            # Extract model names from logs
-                            model_names = set()
-                            for log in filtered_uncertainty:
-                                models = log.get("model", {})
-                                for module, model_info in models.items():
-                                    if isinstance(model_info, dict):
-                                        model_names.add(model_info.get("model_name"))
-                            
-                            if len(model_names) < 2:
-                                st.warning("Need experiments with at least 2 different models")
-                                st.info(f"Found models: {', '.join(model_names) if model_names else 'None'}")
-                            else:
-                                model_list = sorted(model_names)
-                                
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    model_a = st.selectbox("Model A", options=model_list, index=0)
-                                with col2:
-                                    model_b = st.selectbox("Model B", options=model_list, index=min(1, len(model_list)-1))
-                                
-                                if model_a == model_b:
-                                    st.warning("Please select two different models")
-                                else:
-                                    # Get success rates for each model
-                                    def get_model_success_rates(model_name):
-                                        exp_ids_with_model = []
-                                        for log in filtered_uncertainty:
-                                            models = log.get("model", {})
-                                            for module, model_info in models.items():
-                                                if isinstance(model_info, dict) and model_info.get("model_name") == model_name:
-                                                    exp_ids_with_model.append(log.get("experiment_id"))
-                                                    break
-                                        
-                                        success_rates = []
-                                        for exp_id in set(exp_ids_with_model):
-                                            exp_grasps = [g for g in filtered_grasp if g.get("experiment_id") == exp_id]
-                                            if exp_grasps:
-                                                success_rate = sum(1 for g in exp_grasps if g.get("success")) / len(exp_grasps)
-                                                success_rates.append(success_rate)
-                                        return success_rates
-                                    
-                                    rates_a = get_model_success_rates(model_a)
-                                    rates_b = get_model_success_rates(model_b)
-                                    
-                                    if len(rates_a) < 2 or len(rates_b) < 2:
-                                        st.warning(f"Need at least 2 experiments per model (found: {len(rates_a)} for {model_a}, {len(rates_b)} for {model_b})")
-                                    else:
-                                        # Perform Mann-Whitney U test
-                                        u_stat, p_value = mannwhitneyu(rates_a, rates_b, alternative='two-sided')
-                                        
-                                        # Display results
-                                        col1, col2, col3 = st.columns(3)
-                                        
-                                        col1.metric("U Statistic", f"{u_stat:.1f}")
-                                        col2.metric("p-value", f"{p_value:.4f}")
-                                        
-                                        if p_value < 0.05:
-                                            col3.metric("Result", "✅ Significant")
-                                            st.success(f"**Conclusion:** Models show significantly different performance (p = {p_value:.4f})")
-                                        else:
-                                            col3.metric("Result", "❌ Not Significant")
-                                            st.info(f"**Conclusion:** No significant difference found (p = {p_value:.4f})")
-                                            st.success("💡 **Research Implication:** SVLMs may be viable alternatives!")
-                                        
-                                        # Descriptive statistics
-                                        st.markdown("**Descriptive Statistics:**")
-                                        stats_df = pd.DataFrame({
-                                            'Model': [model_a, model_b],
-                                            'N': [len(rates_a), len(rates_b)],
-                                            'Mean Success': [f"{np.mean(rates_a):.3f}", f"{np.mean(rates_b):.3f}"],
-                                            'Median': [f"{np.median(rates_a):.3f}", f"{np.median(rates_b):.3f}"],
-                                            'Std Dev': [f"{np.std(rates_a):.3f}", f"{np.std(rates_b):.3f}"]
-                                        })
-                                        st.dataframe(stats_df, use_container_width=True)
-                                        
-                                        # Distribution comparison
-                                        st.markdown("**Distribution Comparison:**")
-                                        comparison_df = pd.DataFrame({
-                                            'Success Rate': rates_a + rates_b,
-                                            'Model': [model_a]*len(rates_a) + [model_b]*len(rates_b)
-                                        })
-                                        
-                                        violin_plot = alt.Chart(comparison_df).transform_density(
-                                            'Success Rate',
-                                            as_=['Success Rate', 'density'],
-                                            groupby=['Model']
-                                        ).mark_area(orient='horizontal', opacity=0.5).encode(
-                                            y=alt.Y('Success Rate:Q', scale=alt.Scale(domain=[0, 1])),
-                                            x=alt.X('density:Q', title=None, axis=alt.Axis(labels=False, ticks=False)),
-                                            color=alt.Color('Model:N'),
-                                            row=alt.Row('Model:N', title=None)
-                                        ).properties(height=150)
-                                        
-                                        st.altair_chart(violin_plot, use_container_width=True)
-                        
-                        # ========== ANOVA TEST ==========
-                        elif test_type == "Multiple Prompt Variants (ANOVA)":
-                            st.markdown("#### ANOVA: Compare Multiple Prompt Variants")
-                            st.markdown("**Research Question (RQ1):** Which prompt engineering strategy is most effective?")
-                            
-                            # Get unique prompt types
-                            prompt_types = set(log.get("experiment_group") for log in filtered_uncertainty)
-                            
-                            # Also check for different prompt names if available
-                            prompt_names = set()
-                            for log in filtered_uncertainty:
-                                pnames = log.get("prompt_name", {})
-                                if isinstance(pnames, dict):
-                                    for module, pname in pnames.items():
-                                        if pname:
-                                            # Extract prompt variant (e.g., "confidence", "hedging")
-                                            parts = pname.split('_')
-                                            if len(parts) > 2:
-                                                prompt_names.add(parts[-1])  # Last part is usually the variant
-                            
-                            if len(prompt_types) < 3 and len(prompt_names) < 3:
-                                st.warning("ANOVA requires at least 3 groups. Run more prompt variants.")
-                                st.info(f"Currently have: {len(prompt_types)} experiment groups, {len(prompt_names)} prompt variants")
-                            else:
-                                metric_choice = st.radio(
-                                    "Select metric to compare",
-                                    ["Success Rate", "Calibration Quality (ECE)", "Average Retries"],
-                                    horizontal=True
-                                )
-                                
-                                # Group data by prompt variant
-                                groups = {}
-                                
-                                for log in filtered_uncertainty:
-                                    # Determine group identifier
-                                    group_id = log.get("experiment_group", "unknown")
-                                    
-                                    exp_id = log.get("experiment_id")
-                                    exp_grasps = [g for g in filtered_grasp if g.get("experiment_id") == exp_id]
-                                    
-                                    if exp_grasps:
-                                        if group_id not in groups:
-                                            groups[group_id] = []
-                                        
-                                        if metric_choice == "Success Rate":
-                                            value = sum(1 for g in exp_grasps if g.get("success")) / len(exp_grasps)
-                                        elif metric_choice == "Calibration Quality (ECE)":
-                                            _, ece = calculate_calibration_metrics([log], exp_grasps)
-                                            value = ece if ece is not None else None
-                                        else:  # Average Retries
-                                            value = np.mean([g.get("retries", 0) for g in exp_grasps])
-                                        
-                                        if value is not None:
-                                            groups[group_id].append(value)
-                                
-                                # Filter groups with sufficient data
-                                valid_groups = {k: v for k, v in groups.items() if len(v) >= 2}
-                                
-                                if len(valid_groups) < 3:
-                                    st.warning(f"Need at least 3 groups with 2+ samples each. Have: {len(valid_groups)}")
-                                else:
-                                    # Perform ANOVA
-                                    f_stat, p_value = stats.f_oneway(*valid_groups.values())
-                                    
-                                    # Display results
-                                    col1, col2, col3 = st.columns(3)
-                                    
-                                    col1.metric("F-statistic", f"{f_stat:.3f}")
-                                    col2.metric("p-value", f"{p_value:.4f}")
-                                    col3.metric("Groups", len(valid_groups))
-                                    
-                                    if p_value < 0.05:
-                                        st.success(f"**Conclusion:** Significant difference exists among prompt variants (p = {p_value:.4f})")
-                                        st.info("💡 Consider post-hoc tests (e.g., Tukey HSD) to identify which specific pairs differ")
-                                    else:
-                                        st.info(f"**Conclusion:** No significant differences found (p = {p_value:.4f})")
-                                    
-                                    # Group statistics table
-                                    st.markdown("**Group Statistics:**")
-                                    stats_data = []
-                                    for group_name, values in valid_groups.items():
-                                        stats_data.append({
-                                            'Group': group_name,
-                                            'N': len(values),
-                                            'Mean': f"{np.mean(values):.3f}",
-                                            'Std Dev': f"{np.std(values):.3f}",
-                                            'Min': f"{np.min(values):.3f}",
-                                            'Max': f"{np.max(values):.3f}"
-                                        })
-                                    
-                                    stats_df = pd.DataFrame(stats_data)
-                                    st.dataframe(stats_df, use_container_width=True)
-                                    
-                                    # Box plot comparison
-                                    st.markdown("**Distribution Comparison:**")
-                                    plot_data = []
-                                    for group_name, values in valid_groups.items():
-                                        for value in values:
-                                            plot_data.append({'Group': group_name, 'Value': value})
-                                    
-                                    plot_df = pd.DataFrame(plot_data)
-                                    
-                                    box_plot = alt.Chart(plot_df).mark_boxplot(size=40).encode(
-                                        x=alt.X('Group:N', title=None, axis=alt.Axis(labelAngle=-45)),
-                                        y=alt.Y('Value:Q', title=metric_choice),
-                                        color=alt.Color('Group:N', legend=None)
-                                    ).properties(height=350)
-                                    
-                                    st.altair_chart(box_plot, use_container_width=True)
+                with col1:
+                    st.markdown(f"**{model1}**")
+                    if 'success' in model1_data.columns:
+                        sr1 = model1_data['success'].mean() * 100
+                        st.metric("Success Rate", f"{sr1:.1f}%")
+                    conf1 = model1_data['overall_confidence'].mean()
+                    st.metric("Avg Confidence", f"{conf1:.3f}")
+                    st.metric("N", len(model1_data))
                 
-                # ========== TAB 4: LEADERBOARD ==========
-                with analysis_tabs[3]:
-                    st.markdown("### 🏆 Model Configuration Leaderboard")
-                    st.markdown("Ranked by composite performance score (calibration + success rate)")
-                    
-                    if not filtered_grasp:
-                        st.info("No grasp data available for leaderboard")
-                    else:
-                        # Build leaderboard data
-                        leaderboard_data = []
-                        
-                        for log in filtered_uncertainty:
-                            exp_id = log.get("experiment_id")
-                            exp_group = log.get("experiment_group", "unknown")
-                            
-                            # Get model info
-                            models = log.get("model", {})
-                            model_names = []
-                            for module in ["grounder", "planner", "ranker"]:
-                                if module in models and isinstance(models[module], dict):
-                                    model_names.append(models[module].get("model_name", "unknown"))
-                            
-                            model_str = " / ".join(model_names) if model_names else "unknown"
-                            
-                            # Get performance metrics
-                            exp_grasps = [g for g in filtered_grasp if g.get("experiment_id") == exp_id]
-                            
-                            if exp_grasps:
-                                success_rate = sum(1 for g in exp_grasps if g.get("success")) / len(exp_grasps)
-                                avg_retries = np.mean([g.get("retries", 0) for g in exp_grasps])
-                                
-                                # Get calibration
-                                _, ece = calculate_calibration_metrics([log], exp_grasps)
-                                
-                                # Calculate composite score
-                                # Normalize: success_rate (higher better), 1-ECE (higher better), 1/(1+retries) (higher better)
-                                norm_success = success_rate
-                                norm_calib = (1 - ece) if ece is not None else 0.5
-                                norm_retries = 1 / (1 + avg_retries)
-                                
-                                composite = (norm_success * 0.5 + norm_calib * 0.3 + norm_retries * 0.2)
-                                
-                                leaderboard_data.append({
-                                    'Experiment ID': exp_id[:16] + "...",
-                                    'Group': exp_group,
-                                    'Model': model_str,
-                                    'Success Rate': success_rate,
-                                    'ECE': ece if ece is not None else np.nan,
-                                    'Avg Retries': avg_retries,
-                                    'Composite Score': composite
-                                })
-                        
-                        if leaderboard_data:
-                            lb_df = pd.DataFrame(leaderboard_data)
-                            lb_df = lb_df.sort_values('Composite Score', ascending=False)
-                            
-                            # Format for display
-                            display_df = lb_df.copy()
-                            display_df['Success Rate'] = display_df['Success Rate'].apply(lambda x: f"{x:.1%}")
-                            display_df['ECE'] = display_df['ECE'].apply(lambda x: f"{x:.3f}" if not pd.isna(x) else "N/A")
-                            display_df['Avg Retries'] = display_df['Avg Retries'].apply(lambda x: f"{x:.2f}")
-                            display_df['Composite Score'] = display_df['Composite Score'].apply(lambda x: f"{x:.3f}")
-                            
-                            # Highlight top 3
-                            def highlight_top3(row):
-                                if row.name == 0:
-                                    return ['background-color: #FFD700'] * len(row)  # Gold
-                                elif row.name == 1:
-                                    return ['background-color: #C0C0C0'] * len(row)  # Silver
-                                elif row.name == 2:
-                                    return ['background-color: #CD7F32'] * len(row)  # Bronze
-                                return [''] * len(row)
-                            
-                            styled_df = display_df.style.apply(highlight_top3, axis=1)
-                            
-                            st.dataframe(styled_df, use_container_width=True, height=400)
-                            
-                            # Top performer summary
-                            if len(lb_df) > 0:
-                                st.markdown("---")
-                                st.markdown("#### 🥇 Top Performer")
-                                
-                                top = lb_df.iloc[0]
-                                col1, col2, col3, col4 = st.columns(4)
-                                
-                                col1.metric("Experiment", top['Experiment ID'])
-                                col2.metric("Success Rate", f"{top['Success Rate']:.1%}")
-                                col3.metric("ECE", f"{top['ECE']:.3f}" if not pd.isna(top['ECE']) else "N/A")
-                                col4.metric("Score", f"{top['Composite Score']:.3f}")
-                        else:
-                            st.info("No leaderboard data available")
+                with col2:
+                    st.markdown(f"**{model2}**")
+                    if 'success' in model2_data.columns:
+                        sr2 = model2_data['success'].mean() * 100
+                        st.metric("Success Rate", f"{sr2:.1f}%")
+                    conf2 = model2_data['overall_confidence'].mean()
+                    st.metric("Avg Confidence", f"{conf2:.3f}")
+                    st.metric("N", len(model2_data))
                 
-                # ========== TAB 5: RAW DATA ==========
-                with analysis_tabs[4]:
-                    st.markdown("### 📋 Raw Uncertainty Logs")
-                    
-                    # Display options
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        show_metadata = st.checkbox("Show metadata columns", value=False)
-                    with col2:
-                        rows_to_show = st.number_input("Rows", min_value=10, max_value=1000, value=100, step=10)
-                    
-                    # Prepare dataframe
-                    df_display = pd.DataFrame(filtered_uncertainty)
-                    
-                    if not show_metadata:
-                        # Hide complex nested columns
-                        simple_cols = [col for col in df_display.columns if not col.startswith('metadata')]
-                        df_display = df_display[simple_cols]
-                    
-                    st.dataframe(df_display.head(rows_to_show), use_container_width=True, height=400)
-                    
-                    # Download options
-                    st.markdown("---")
-                    st.markdown("### 💾 Export Data")
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        # Download uncertainty logs
-                        json_str = json.dumps(filtered_uncertainty, indent=2)
-                        st.download_button(
-                            "📥 Download Uncertainty Logs (JSON)",
-                            data=json_str,
-                            file_name=f"uncertainty_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                            mime="application/json"
-                        )
-                    
-                    with col2:
-                        # Download grasp logs if available
-                        if filtered_grasp:
-                            grasp_json = json.dumps(filtered_grasp, indent=2)
-                            st.download_button(
-                                "📥 Download Grasp Logs (JSON)",
-                                data=grasp_json,
-                                file_name=f"grasp_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                                mime="application/json"
-                            )
+                with col3:
+                    st.markdown("**Statistical Test**")
+                    stat, p_val, test_type = perform_ttest(
+                        model1_data['overall_confidence'],
+                        model2_data['overall_confidence']
+                    )
+                    st.metric("Test Type", test_type)
+                    st.metric("p-value", f"{p_val:.4f}" if not np.isnan(p_val) else "N/A")
+                    st.metric("Significance", get_significance_marker(p_val))
+                
+                # Visualization: Side-by-side comparison
+                fig = make_subplots(rows=1, cols=2, subplot_titles=['Success Rate', 'Confidence Distribution'])
+                
+                # Success rate comparison
+                if 'success' in filtered_df.columns:
+                    sr_data = pd.DataFrame({
+                        'Model': [model1, model2],
+                        'Success Rate': [
+                            model1_data['success'].mean(),
+                            model2_data['success'].mean()
+                        ]
+                    })
+                    fig.add_trace(
+                        go.Bar(x=sr_data['Model'], y=sr_data['Success Rate'], name='Success Rate'),
+                        row=1, col=1
+                    )
+                
+                # Confidence distribution
+                fig.add_trace(
+                    go.Box(y=model1_data['overall_confidence'], name=model1),
+                    row=1, col=2
+                )
+                fig.add_trace(
+                    go.Box(y=model2_data['overall_confidence'], name=model2),
+                    row=1, col=2
+                )
+                
+                fig.update_layout(height=400, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Need at least 2 model categories for comparison")
+    else:
+        st.info("Model category or confidence data not available")
+    
+    # C3: Different Prompt Types (ANOVA)
+    st.subheader("3️⃣ Prompt Type Comparison (ANOVA)")
+    
+    if 'prompt_type' in filtered_df.columns and 'overall_confidence' in filtered_df.columns:
+        prompt_types = filtered_df['prompt_type'].dropna().unique()
+        
+        if len(prompt_types) >= 2:
+            # Prepare data for ANOVA
+            groups = [filtered_df[filtered_df['prompt_type'] == pt]['overall_confidence'] for pt in prompt_types]
+            
+            f_stat, p_value, posthoc_df = perform_anova(groups, prompt_types.tolist())
+            
+            col1, col2 = st.columns([1, 2])
+            
+            with col1:
+                st.markdown("**ANOVA Results**")
+                st.metric("F-statistic", f"{f_stat:.3f}" if not np.isnan(f_stat) else "N/A")
+                st.metric("p-value", f"{p_value:.4f}" if not np.isnan(p_value) else "N/A")
+                st.metric("Significance", get_significance_marker(p_value))
+                
+                if p_value < 0.05:
+                    st.success("Significant difference detected among groups!")
+                else:
+                    st.info("No significant difference among groups")
+            
+            with col2:
+                if not posthoc_df.empty:
+                    st.markdown("**Post-hoc Pairwise Comparisons (Bonferroni-corrected)**")
+                    posthoc_display = posthoc_df.copy()
+                    posthoc_display['p_value'] = posthoc_display['p_value'].apply(lambda x: f"{x:.4f}")
+                    posthoc_display['significant'] = posthoc_display['significant'].apply(lambda x: "Yes ✓" if x else "No")
+                    st.dataframe(posthoc_display, use_container_width=True)
+            
+            # Visualization
+            fig = px.box(
+                filtered_df,
+                x='prompt_type',
+                y='overall_confidence',
+                title="Confidence Distribution by Prompt Type",
+                labels={'prompt_type': 'Prompt Type', 'overall_confidence': 'Overall Confidence'}
+            )
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Need at least 2 prompt types for ANOVA")
+    else:
+        st.info("Prompt type or confidence data not available")
+    
+    # ===== SECTION D: DETAILED UNCERTAINTY METRICS =====
+    st.markdown("---")
+    st.header("🔬 Detailed Uncertainty Metrics")
+    
+    # Stage-wise confidence and entropy
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Confidence by Stage")
+        stage_confidence = []
+        for stage in ['grounder', 'planner', 'ranker']:
+            col = f'{stage}_confidence'
+            if col in filtered_df.columns:
+                avg = filtered_df[col].mean()
+                std = filtered_df[col].std()
+                stage_confidence.append({'Stage': stage.capitalize(), 'Mean': avg, 'Std': std})
+        
+        if stage_confidence:
+            stage_df = pd.DataFrame(stage_confidence)
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=stage_df['Stage'],
+                y=stage_df['Mean'],
+                error_y=dict(type='data', array=stage_df['Std']),
+                text=stage_df['Mean'],
+                texttemplate='%{text:.3f}',
+                textposition='outside'
+            ))
+            fig.update_layout(
+                title="Average Confidence by Pipeline Stage",
+                xaxis_title="Stage",
+                yaxis_title="Confidence",
+                height=400,
+                yaxis_range=[0, 1.1]
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Stage-wise confidence data not available")
+    
+    with col2:
+        st.subheader("Entropy by Stage")
+        stage_entropy = []
+        for stage in ['grounder', 'planner', 'ranker']:
+            col = f'{stage}_entropy'
+            if col in filtered_df.columns:
+                avg = filtered_df[col].mean()
+                std = filtered_df[col].std()
+                stage_entropy.append({'Stage': stage.capitalize(), 'Mean': avg, 'Std': std})
+        
+        if stage_entropy:
+            entropy_df = pd.DataFrame(stage_entropy)
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=entropy_df['Stage'],
+                y=entropy_df['Mean'],
+                error_y=dict(type='data', array=entropy_df['Std']),
+                text=entropy_df['Mean'],
+                texttemplate='%{text:.3f}',
+                textposition='outside'
+            ))
+            fig.update_layout(
+                title="Average Entropy by Pipeline Stage",
+                xaxis_title="Stage",
+                yaxis_title="Entropy",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Stage-wise entropy data not available")
+    
+    # Confidence vs Entropy scatter
+    if 'overall_confidence' in filtered_df.columns:
+        # Calculate overall entropy
+        entropy_cols = [col for col in filtered_df.columns if '_entropy' in col and '_std' not in col]
+        if entropy_cols:
+            filtered_df['overall_entropy'] = filtered_df[entropy_cols].mean(axis=1)
+            
+            fig = px.scatter(
+                filtered_df,
+                x='overall_confidence',
+                y='overall_entropy',
+                color='experiment_group' if 'experiment_group' in filtered_df.columns else None,
+                hover_data=['experiment_id'],
+                title="Confidence vs Entropy Relationship",
+                labels={'overall_confidence': 'Overall Confidence', 'overall_entropy': 'Overall Entropy'}
+            )
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # ===== SECTION E: INDIVIDUAL EXPERIMENT EXPLORER =====
+    st.markdown("---")
+    st.header("🔍 Individual Experiment Explorer")
+    
+    # Select columns to display
+    display_cols = ['experiment_id', 'experiment_group', 'timestamp', 'success', 'overall_confidence']
+    display_cols += [col for col in ['prompt_type', 'model_category', 'batch_id', 'attempts', 'n_objects', 'query'] if col in filtered_df.columns]
+    
+    available_cols = [col for col in display_cols if col in filtered_df.columns]
+    
+    st.dataframe(
+        filtered_df[available_cols].sort_values('timestamp', ascending=False),
+        use_container_width=True,
+        height=400
+    )
+    
+    # Export functionality
+    col1, col2, col3 = st.columns([1, 1, 2])
+    
+    with col1:
+        csv = filtered_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Filtered Data (CSV)",
+            data=csv,
+            file_name=f"uncertainty_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
+    
+    with col2:
+        st.metric("Filtered Experiments", len(filtered_df))
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("*Dashboard created for OWG Uncertainty Analysis Project*")
 
 with tabs[4]:
     # --- Run Experiment ---
