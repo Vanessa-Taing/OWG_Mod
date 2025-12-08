@@ -1,0 +1,37 @@
+{
+  "total_experiments": 36,
+  "successful": 23,
+  "failed": 13,
+  "by_prompt_type": {
+    "confidence": {
+      "total": 18,
+      "successful": 10,
+      "success_rate": 0.5555555555555556
+    },
+    "baseline": {
+      "total": 18,
+      "successful": 13,
+      "success_rate": 0.7222222222222222
+    }
+  },
+  "by_model": {
+    "gpt-4o-mini": {
+      "total": 18,
+      "successful": 6,
+      "success_rate": 0.3333333333333333
+    },
+    "gpt-4o": {
+      "total": 18,
+      "successful": 17,
+      "success_rate": 0.9444444444444444
+    }
+  },
+  "by_n_objects": {
+    "12": {
+      "total": 36,
+      "successful": 23,
+      "success_rate": 0.6388888888888888
+    }
+  },
+  "average_runtime": null
+}

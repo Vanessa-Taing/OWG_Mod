@@ -1,16 +1,13 @@
 # app.py
 import sys, os
-import requests
 import yaml
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import numpy as np
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 import json
 import os
 import pandas as pd
 from datetime import datetime
-import time
 import altair as alt
 import plotly.express as px
 import plotly.graph_objects as go
@@ -18,6 +15,8 @@ from plotly.subplots import make_subplots
 from owg_mod.prompt_library import SystemPromptLibrary
 from owg_mod.model_utils_litellm import check_litellm
 from owg_mod.app_utils import (
+    safe_column_exists,
+    load_experiment_metrics,  # ADD THIS
     load_uncertainty_logs,
     load_batch_logs,
     merge_logs,
@@ -339,8 +338,6 @@ with tabs[2]:
 
 # 📊 Refined Uncertainty Analysis Dashboard with Statistical Tests
 with tabs[3]:
-    st.set_page_config(page_title="Uncertainty Analysis Dashboard", layout="wide")
-    
     st.title("🎯 Uncertainty Analysis Dashboard")
     st.markdown("*Open World Grasping (OWG) Project - Uncertainty Estimation Module*")
     
@@ -348,13 +345,43 @@ with tabs[3]:
     with st.spinner("Loading data..."):
         uncertainty_df = load_uncertainty_logs()
         batch_df = load_batch_logs()
+        metrics_df = load_experiment_metrics()  # ADD THIS LINE
         
         if uncertainty_df.empty:
-            st.error("No uncertainty logs found at ~/OWG/logs/uncertainty_logs.jsonl")
+            st.error("❌ No uncertainty logs found at ~/OWG/logs/uncertainty_logs.jsonl")
+            st.info("Please ensure experiments have been run and logged.")
+
+        # DEBUG: Show raw counts
+        with st.expander("🔧 Debug Info - Raw Data Counts", expanded=False):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Uncertainty Logs", len(uncertainty_df))
+                if 'experiment_id' in uncertainty_df.columns:
+                    st.caption(f"Unique IDs: {uncertainty_df['experiment_id'].nunique()}")
+            with col2:
+                st.metric("Batch Logs", len(batch_df))
+                if not batch_df.empty and 'experiment_id' in batch_df.columns:
+                    st.caption(f"Unique IDs: {batch_df['experiment_id'].nunique()}")
+            with col3:
+                st.metric("Metrics Logs", len(metrics_df))
+                if not metrics_df.empty and 'experiment_id' in metrics_df.columns:
+                    st.caption(f"Unique IDs: {metrics_df['experiment_id'].nunique()}")
         
         # Merge datasets
-        df = merge_logs(uncertainty_df, batch_df)
+        df = merge_logs(uncertainty_df, batch_df, metrics_df)
         df = calculate_overall_confidence(df)
+        
+        # Validate essential columns exist
+        required_cols = ['experiment_id']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
+            st.info("The log file may be corrupted or in an unexpected format.")
+        
+        if len(df) == 0:
+            st.warning("⚠️ No valid experiments found in the logs.")
+            st.info("The log file exists but contains no valid data.")
     
     # ===== FILTER PANEL =====
     with st.expander("🔍 **Advanced Filters**", expanded=True):
@@ -362,7 +389,11 @@ with tabs[3]:
         
         with col1:
             # Batch ID filter
-            batch_ids = ['All'] + sorted([b for b in df['batch_id'].dropna().unique()])
+            if 'batch_id' in df.columns:
+                batch_ids = ['All'] + sorted([b for b in df['batch_id'].dropna().unique()])
+            else:
+                batch_ids = ['All']
+            
             selected_batches = st.multiselect(
                 "Batch ID",
                 options=batch_ids,
@@ -370,7 +401,11 @@ with tabs[3]:
             )
             
             # Experiment Group filter
-            exp_groups = df['experiment_group'].dropna().unique().tolist()
+            if 'experiment_group' in df.columns:
+                exp_groups = df['experiment_group'].dropna().unique().tolist()
+            else:
+                exp_groups = []
+            
             selected_groups = st.multiselect(
                 "Experiment Group",
                 options=exp_groups,
@@ -379,7 +414,11 @@ with tabs[3]:
         
         with col2:
             # Prompt Type filter
-            prompt_types = df['prompt_type'].dropna().unique().tolist()
+            if 'prompt_type' in df.columns:
+                prompt_types = df['prompt_type'].dropna().unique().tolist()
+            else:
+                prompt_types = []
+            
             selected_prompts = st.multiselect(
                 "Prompt Type",
                 options=prompt_types,
@@ -389,20 +428,33 @@ with tabs[3]:
             # Model Name filter
             all_models = set()
             for col in ['grounder_model', 'planner_model', 'ranker_model']:
-                all_models.update(df[col].dropna().unique())
+                if col in df.columns:
+                    all_models.update(df[col].dropna().unique())
+            
             selected_models = st.multiselect(
                 "Model Name",
-                options=sorted(all_models),
-                default=sorted(all_models)
+                options=sorted(all_models) if all_models else [],
+                default=sorted(all_models) if all_models else []
             )
         
         with col3:
-            # Model Category filter
-            model_cats = df['model_category'].dropna().unique().tolist()
+            # Model Category filter - extract all unique categories from comma-separated values
+            if 'model_category' in df.columns:
+                all_categories = set()
+                for cat_value in df['model_category'].dropna().unique():
+                    if cat_value:  # Skip None/empty
+                        # Split comma-separated categories
+                        cats = [c.strip() for c in str(cat_value).split(',') if c.strip()]
+                        all_categories.update(cats)
+                model_cats = sorted(all_categories)
+            else:
+                model_cats = []
+            
             selected_categories = st.multiselect(
                 "Model Category",
                 options=model_cats,
-                default=model_cats
+                default=model_cats,
+                help="Shows all categories used across all pipeline stages"
             )
             
             # Success filter
@@ -414,7 +466,7 @@ with tabs[3]:
         
         with col4:
             # Date range filter
-            if 'date' in df.columns and not df['date'].isna().all():
+            if safe_column_exists(df, 'date'):
                 min_date = df['date'].min()
                 max_date = df['date'].max()
                 date_range = st.date_input(
@@ -425,9 +477,10 @@ with tabs[3]:
                 )
             else:
                 date_range = None
+                st.info("Date filter unavailable")
             
             # Number of objects range
-            if 'n_objects' in df.columns and not df['n_objects'].isna().all():
+            if safe_column_exists(df, 'n_objects'):
                 min_obj = int(df['n_objects'].min())
                 max_obj = int(df['n_objects'].max())
                 
@@ -452,10 +505,10 @@ with tabs[3]:
     # Apply filters
     filters = {
         'batch_ids': None if 'All' in selected_batches else selected_batches,
-        'experiment_groups': selected_groups,
-        'prompt_types': selected_prompts,
-        'model_names': selected_models,
-        'model_categories': selected_categories,
+        'experiment_groups': selected_groups if selected_groups else None,
+        'prompt_types': selected_prompts if selected_prompts else None,
+        'model_names': selected_models if selected_models else None,
+        'model_categories': selected_categories if selected_categories else None,
         'success_filter': success_filter,
         'date_range': date_range if date_range and len(date_range) == 2 else None,
         'n_objects_range': n_objects_range,
@@ -465,9 +518,20 @@ with tabs[3]:
     filtered_df = filter_dataframe(df, filters)
     
     if filtered_df.empty:
-        st.warning("No data matches the selected filters.")
+        st.warning("⚠️ No data matches the selected filters.")
     
-    st.success(f"**{len(filtered_df)}** experiments loaded (filtered from {len(df)} total)")
+    st.success(f"✅ **{len(filtered_df)}** experiments loaded (filtered from {len(df)} total)")
+
+    # Show breakdown of batch vs individual experiments
+    if 'batch_id' in filtered_df.columns:
+        n_batch = filtered_df['batch_id'].notna().sum()
+        n_individual = filtered_df['batch_id'].isna().sum()
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.info(f"📦 **{n_batch}** batch experiments")
+        with col2:
+            st.info(f"📝 **{n_individual}** individual experiments")
     
     # ===== SECTION A: KEY METRICS OVERVIEW =====
     st.markdown("---")
@@ -480,29 +544,32 @@ with tabs[3]:
         st.metric("Total Experiments", f"{total_experiments:,}")
     
     with col2:
-        if 'success' in filtered_df.columns:
+        if safe_column_exists(filtered_df, 'success'):
             success_rate = filtered_df['success'].mean() * 100
             st.metric("Success Rate", f"{success_rate:.1f}%")
         else:
             st.metric("Success Rate", "N/A")
     
     with col3:
-        if 'overall_confidence' in filtered_df.columns:
+        if safe_column_exists(filtered_df, 'overall_confidence'):
             avg_confidence = filtered_df['overall_confidence'].mean()
             st.metric("Avg Confidence", f"{avg_confidence:.3f}")
         else:
             st.metric("Avg Confidence", "N/A")
     
     with col4:
-        if 'attempts' in filtered_df.columns:
+        if safe_column_exists(filtered_df, 'attempts'):
             avg_attempts = filtered_df['attempts'].mean()
             st.metric("Avg Attempts", f"{avg_attempts:.2f}")
         else:
             st.metric("Avg Attempts", "N/A")
     
     with col5:
-        unique_batches = filtered_df['batch_id'].dropna().unique() if 'batch_id' in filtered_df.columns else []
-        st.metric("Unique Batches", len(unique_batches))
+        if 'batch_id' in filtered_df.columns:
+            unique_batches = filtered_df['batch_id'].dropna().unique()
+            st.metric("Unique Batches", len(unique_batches))
+        else:
+            st.metric("Unique Batches", "0")
     
     # ===== SECTION B: PRIORITY ANALYSIS =====
     st.markdown("---")
@@ -510,8 +577,8 @@ with tabs[3]:
     
     # B1: Success Rate vs Confidence Correlation
     st.subheader("1️⃣ Success Rate vs Confidence Correlation")
-
-    if 'success' in filtered_df.columns and 'overall_confidence' in filtered_df.columns:
+    
+    if safe_column_exists(filtered_df, 'success') and safe_column_exists(filtered_df, 'overall_confidence'):
         # Filter out invalid confidence values and ensure clean data
         plot_df = filtered_df[
             (filtered_df['overall_confidence'].notna()) & 
@@ -532,8 +599,8 @@ with tabs[3]:
                     plot_df,
                     x='overall_confidence',
                     y='success_numeric',
-                    color='experiment_group' if 'experiment_group' in plot_df.columns else None,
-                    hover_data=['experiment_id', 'prompt_type', 'model_category'],
+                    color='experiment_group' if safe_column_exists(plot_df, 'experiment_group') else None,
+                    hover_data=['experiment_id', 'prompt_type', 'model_category'] if all(safe_column_exists(plot_df, c) for c in ['experiment_id', 'prompt_type', 'model_category']) else ['experiment_id'],
                     title="Success vs Overall Confidence",
                     labels={'overall_confidence': 'Overall Confidence', 'success_numeric': 'Success (0=Fail, 1=Success)'},
                     trendline="ols"
@@ -561,59 +628,62 @@ with tabs[3]:
                         strength = "strong"
                     st.info(f"Correlation is **{strength}** and **{get_significance_marker(p_value) if p_value < 0.05 else 'not significant'}**")
         else:
-            st.warning("No valid data available after filtering invalid confidence values")
+            st.warning("⚠️ No valid data available after filtering invalid confidence values")
     else:
         st.info("Success or confidence data not available")
     
     # B2: Performance by Model Type
     st.subheader("2️⃣ Performance by Model Type")
     
-    if 'model_category' in filtered_df.columns:
+    if safe_column_exists(filtered_df, 'model_category'):
         model_perf = calculate_success_rate(filtered_df, 'model_category')
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Success rate by model category
-            fig = px.bar(
-                model_perf,
-                x='model_category',
-                y='success_rate',
-                text='success_rate',
-                title="Success Rate by Model Category",
-                labels={'model_category': 'Model Category', 'success_rate': 'Success Rate'}
-            )
-            fig.update_traces(texttemplate='%{text:.1%}', textposition='outside')
-            fig.update_layout(height=400, yaxis_range=[0, 1.1])
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            # Confidence by model category
-            if 'overall_confidence' in filtered_df.columns:
-                conf_by_model = filtered_df.groupby('model_category')['overall_confidence'].agg(['mean', 'std', 'count']).reset_index()
-                
-                fig = go.Figure()
-                fig.add_trace(go.Bar(
-                    x=conf_by_model['model_category'],
-                    y=conf_by_model['mean'],
-                    error_y=dict(type='data', array=conf_by_model['std']),
-                    text=conf_by_model['mean'],
-                    texttemplate='%{text:.3f}',
-                    textposition='outside'
-                ))
-                fig.update_layout(
-                    title="Average Confidence by Model Category",
-                    xaxis_title="Model Category",
-                    yaxis_title="Average Confidence",
-                    height=400,
-                    yaxis_range=[0, 1.1]
+        if not model_perf.empty:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Success rate by model category
+                fig = px.bar(
+                    model_perf,
+                    x='model_category',
+                    y='success_rate',
+                    text='success_rate',
+                    title="Success Rate by Model Category",
+                    labels={'model_category': 'Model Category', 'success_rate': 'Success Rate'}
                 )
+                fig.update_traces(texttemplate='%{text:.1%}', textposition='outside')
+                fig.update_layout(height=400, yaxis_range=[0, 1.1])
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Confidence data not available")
-        
-        # Show detailed statistics
-        st.dataframe(model_perf, use_container_width=True)
+            
+            with col2:
+                # Confidence by model category
+                if safe_column_exists(filtered_df, 'overall_confidence'):
+                    conf_by_model = filtered_df.groupby('model_category')['overall_confidence'].agg(['mean', 'std', 'count']).reset_index()
+                    
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        x=conf_by_model['model_category'],
+                        y=conf_by_model['mean'],
+                        error_y=dict(type='data', array=conf_by_model['std']),
+                        text=conf_by_model['mean'],
+                        texttemplate='%{text:.3f}',
+                        textposition='outside'
+                    ))
+                    fig.update_layout(
+                        title="Average Confidence by Model Category",
+                        xaxis_title="Model Category",
+                        yaxis_title="Average Confidence",
+                        height=400,
+                        yaxis_range=[0, 1.1]
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Confidence data not available")
+            
+            # Show detailed statistics
+            st.dataframe(model_perf, use_container_width=True)
+        else:
+            st.info("No model category data available for analysis")
     else:
         st.info("Model category data not available")
     
@@ -670,7 +740,7 @@ with tabs[3]:
     # C1: Uncertainty-aware vs Baseline
     st.subheader("1️⃣ Uncertainty-Aware vs Baseline Experiments")
     
-    if 'experiment_group' in filtered_df.columns and 'overall_confidence' in filtered_df.columns:
+    if safe_column_exists(filtered_df, 'experiment_group') and safe_column_exists(filtered_df, 'overall_confidence'):
         groups = filtered_df['experiment_group'].unique()
         
         if len(groups) >= 2:
@@ -690,7 +760,7 @@ with tabs[3]:
                 
                 with col1:
                     st.markdown(f"**{group1_name}**")
-                    if 'success' in group1_data.columns:
+                    if safe_column_exists(group1_data, 'success'):
                         sr1 = group1_data['success'].mean() * 100
                         st.metric("Success Rate", f"{sr1:.1f}%")
                     conf1 = group1_data['overall_confidence'].mean()
@@ -699,7 +769,7 @@ with tabs[3]:
                 
                 with col2:
                     st.markdown(f"**{group2_name}**")
-                    if 'success' in group2_data.columns:
+                    if safe_column_exists(group2_data, 'success'):
                         sr2 = group2_data['success'].mean() * 100
                         st.metric("Success Rate", f"{sr2:.1f}%")
                     conf2 = group2_data['overall_confidence'].mean()
@@ -742,7 +812,7 @@ with tabs[3]:
     # C2: Large VLM vs SVLM
     st.subheader("2️⃣ Large VLM vs SVLM Performance")
     
-    if 'model_category' in filtered_df.columns and 'overall_confidence' in filtered_df.columns:
+    if safe_column_exists(filtered_df, 'model_category') and safe_column_exists(filtered_df, 'overall_confidence'):
         model_cats = filtered_df['model_category'].unique()
         
         if len(model_cats) >= 2:
@@ -761,7 +831,7 @@ with tabs[3]:
                 
                 with col1:
                     st.markdown(f"**{model1}**")
-                    if 'success' in model1_data.columns:
+                    if safe_column_exists(model1_data, 'success'):
                         sr1 = model1_data['success'].mean() * 100
                         st.metric("Success Rate", f"{sr1:.1f}%")
                     conf1 = model1_data['overall_confidence'].mean()
@@ -770,7 +840,7 @@ with tabs[3]:
                 
                 with col2:
                     st.markdown(f"**{model2}**")
-                    if 'success' in model2_data.columns:
+                    if safe_column_exists(model2_data, 'success'):
                         sr2 = model2_data['success'].mean() * 100
                         st.metric("Success Rate", f"{sr2:.1f}%")
                     conf2 = model2_data['overall_confidence'].mean()
@@ -791,7 +861,7 @@ with tabs[3]:
                 fig = make_subplots(rows=1, cols=2, subplot_titles=['Success Rate', 'Confidence Distribution'])
                 
                 # Success rate comparison
-                if 'success' in filtered_df.columns:
+                if safe_column_exists(filtered_df, 'success'):
                     sr_data = pd.DataFrame({
                         'Model': [model1, model2],
                         'Success Rate': [
@@ -824,7 +894,7 @@ with tabs[3]:
     # C3: Different Prompt Types (ANOVA)
     st.subheader("3️⃣ Prompt Type Comparison (ANOVA)")
     
-    if 'prompt_type' in filtered_df.columns and 'overall_confidence' in filtered_df.columns:
+    if safe_column_exists(filtered_df, 'prompt_type') and safe_column_exists(filtered_df, 'overall_confidence'):
         prompt_types = filtered_df['prompt_type'].dropna().unique()
         
         if len(prompt_types) >= 2:
@@ -841,10 +911,11 @@ with tabs[3]:
                 st.metric("p-value", f"{p_value:.4f}" if not np.isnan(p_value) else "N/A")
                 st.metric("Significance", get_significance_marker(p_value))
                 
-                if p_value < 0.05:
-                    st.success("Significant difference detected among groups!")
-                else:
-                    st.info("No significant difference among groups")
+                if not np.isnan(p_value):
+                    if p_value < 0.05:
+                        st.success("Significant difference detected among groups!")
+                    else:
+                        st.info("No significant difference among groups")
             
             with col2:
                 if not posthoc_df.empty:
@@ -881,7 +952,7 @@ with tabs[3]:
         stage_confidence = []
         for stage in ['grounder', 'planner', 'ranker']:
             col = f'{stage}_confidence'
-            if col in filtered_df.columns:
+            if safe_column_exists(filtered_df, col):
                 avg = filtered_df[col].mean()
                 std = filtered_df[col].std()
                 stage_confidence.append({'Stage': stage.capitalize(), 'Mean': avg, 'Std': std})
@@ -913,7 +984,7 @@ with tabs[3]:
         stage_entropy = []
         for stage in ['grounder', 'planner', 'ranker']:
             col = f'{stage}_entropy'
-            if col in filtered_df.columns:
+            if safe_column_exists(filtered_df, col):
                 avg = filtered_df[col].mean()
                 std = filtered_df[col].std()
                 stage_entropy.append({'Stage': stage.capitalize(), 'Mean': avg, 'Std': std})
@@ -940,23 +1011,24 @@ with tabs[3]:
             st.info("Stage-wise entropy data not available")
     
     # Confidence vs Entropy scatter
-    if 'overall_confidence' in filtered_df.columns:
+    if safe_column_exists(filtered_df, 'overall_confidence'):
         # Calculate overall entropy
         entropy_cols = [col for col in filtered_df.columns if '_entropy' in col and '_std' not in col]
         if entropy_cols:
             filtered_df['overall_entropy'] = filtered_df[entropy_cols].mean(axis=1)
             
-            fig = px.scatter(
-                filtered_df,
-                x='overall_confidence',
-                y='overall_entropy',
-                color='experiment_group' if 'experiment_group' in filtered_df.columns else None,
-                hover_data=['experiment_id'],
-                title="Confidence vs Entropy Relationship",
-                labels={'overall_confidence': 'Overall Confidence', 'overall_entropy': 'Overall Entropy'}
-            )
-            fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            if safe_column_exists(filtered_df, 'overall_entropy'):
+                fig = px.scatter(
+                    filtered_df,
+                    x='overall_confidence',
+                    y='overall_entropy',
+                    color='experiment_group' if safe_column_exists(filtered_df, 'experiment_group') else None,
+                    hover_data=['experiment_id'],
+                    title="Confidence vs Entropy Relationship",
+                    labels={'overall_confidence': 'Overall Confidence', 'overall_entropy': 'Overall Entropy'}
+                )
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
     
     # ===== SECTION E: INDIVIDUAL EXPERIMENT EXPLORER =====
     st.markdown("---")
@@ -968,8 +1040,14 @@ with tabs[3]:
     
     available_cols = [col for col in display_cols if col in filtered_df.columns]
     
+    # Sort by timestamp if available, otherwise by experiment_id
+    if 'timestamp' in available_cols and safe_column_exists(filtered_df, 'timestamp'):
+        sorted_df = filtered_df[available_cols].sort_values('timestamp', ascending=False)
+    else:
+        sorted_df = filtered_df[available_cols]
+    
     st.dataframe(
-        filtered_df[available_cols].sort_values('timestamp', ascending=False),
+        sorted_df,
         use_container_width=True,
         height=400
     )

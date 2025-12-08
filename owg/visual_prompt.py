@@ -90,7 +90,7 @@ class VisualPrompter:
             "max_tokens": max_tokens,
             "n": n
         }
-
+    
     # def get_variants(self):
     #     return self.cfg.prompt_variants if hasattr(self.cfg, "prompt_variants") else ["_base"]
 

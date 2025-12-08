@@ -12,6 +12,44 @@ import numpy as np
 from scipy import stats
 from datetime import datetime
 
+def safe_column_exists(df: pd.DataFrame, col: str) -> bool:
+    """Safely check if column exists and has non-null values"""
+    return col in df.columns and not df[col].isna().all()
+
+def load_experiment_metrics(metrics_path: str = "~/OWG/logs/experiment_metrics.jsonl") -> pd.DataFrame:
+    """Load and parse experiment metrics (success, attempts, etc.)"""
+    metrics_path = os.path.expanduser(metrics_path)
+    
+    if not os.path.exists(metrics_path):
+        return pd.DataFrame()
+    
+    records = []
+    with open(metrics_path, 'r') as f:
+        for line in f:
+            try:
+                records.append(json.loads(line.strip()))
+            except json.JSONDecodeError:
+                continue
+    
+    if not records:
+        return pd.DataFrame()
+    
+    df = pd.DataFrame(records)
+    
+    # Convert timestamp if exists
+    if 'timestamp' in df.columns:
+        try:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        except Exception:
+            pass
+    
+    # Ensure success is boolean
+    if 'success' in df.columns:
+        df['success'] = df['success'].apply(
+            lambda x: bool(x) if pd.notna(x) and x != '' else np.nan
+        )
+    
+    return df
 
 def load_uncertainty_logs(log_path: str = "~/OWG/logs/uncertainty_logs.jsonl") -> pd.DataFrame:
     """Load and parse uncertainty logs from JSONL file"""
@@ -38,7 +76,18 @@ def load_uncertainty_logs(log_path: str = "~/OWG/logs/uncertainty_logs.jsonl") -
             'experiment_id': record.get('experiment_id'),
             'experiment_group': record.get('experiment_group'),
             'timestamp': record.get('timestamp'),
+            'n_objects': record.get('n_objects'),  # ADD THIS - extract from uncertainty log
         }
+
+        # Extract model_category - handle both list and string
+        model_category = record.get('model_category')
+        if isinstance(model_category, list):
+            # Store as comma-separated string for filtering, and keep original list
+            base['model_category'] = ','.join(model_category) if model_category else None
+            base['model_category_list'] = model_category
+        else:
+            base['model_category'] = model_category
+            base['model_category_list'] = [model_category] if model_category else []
         
         # Extract model info
         model_info = record.get('model', {})
@@ -71,8 +120,11 @@ def load_uncertainty_logs(log_path: str = "~/OWG/logs/uncertainty_logs.jsonl") -
     
     # Convert timestamp to datetime
     if 'timestamp' in df.columns:
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df['date'] = df['timestamp'].dt.date
+        try:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df['date'] = df['timestamp'].dt.date
+        except Exception:
+            pass
     
     return df
 
@@ -108,43 +160,85 @@ def load_batch_logs(experiments_dir: str = "~/OWG/experiments") -> pd.DataFrame:
     
     # Convert timestamp
     if 'timestamp' in df.columns:
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        try:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        except Exception:
+            pass
     
     return df
 
 
-def merge_logs(uncertainty_df: pd.DataFrame, batch_df: pd.DataFrame) -> pd.DataFrame:
-    """Merge uncertainty logs with batch information"""
+def merge_logs(uncertainty_df: pd.DataFrame, batch_df: pd.DataFrame, metrics_df: pd.DataFrame = None) -> pd.DataFrame:
+    """Merge uncertainty logs with batch information and experiment metrics"""
     if uncertainty_df.empty:
         return pd.DataFrame()
     
-    if batch_df.empty:
-        # Add empty batch_id column if no batch data
-        uncertainty_df['batch_id'] = None
-        uncertainty_df['success'] = None
-        uncertainty_df['attempts'] = None
+    # First, extract n_objects and model_category from uncertainty logs if they exist
+    if 'n_objects' not in uncertainty_df.columns:
         uncertainty_df['n_objects'] = None
-        uncertainty_df['query'] = None
-        uncertainty_df['prompt_type'] = None
+    if 'model_category' not in uncertainty_df.columns:
         uncertainty_df['model_category'] = None
-        return uncertainty_df
     
-    # Merge on experiment_id
-    merged = uncertainty_df.merge(
-        batch_df[['experiment_id', 'batch_id', 'success', 'attempts', 
-                  'n_objects', 'query', 'prompt_type', 'model_category']],
-        on='experiment_id',
-        how='left'
-    )
+    # Start with uncertainty_df as base
+    merged = uncertainty_df.copy()
     
-    # Ensure success column is boolean/binary
-    if 'success' in merged.columns:
-        # Convert to boolean, handling various input types
-        merged['success'] = merged['success'].apply(
-            lambda x: bool(x) if pd.notna(x) and x != '' else np.nan
+    # Merge batch data if available
+    if not batch_df.empty:
+        batch_cols = ['experiment_id', 'batch_id', 'query', 'prompt_type']
+        
+        # Only merge n_objects and model_category from batch_df if they exist
+        if 'n_objects' in batch_df.columns:
+            batch_cols.append('n_objects')
+        if 'model_category' in batch_df.columns:
+            batch_cols.append('model_category')
+        
+        # Select only columns that exist in batch_df
+        batch_cols_existing = [col for col in batch_cols if col in batch_df.columns]
+        
+        merged = merged.merge(
+            batch_df[batch_cols_existing],
+            on='experiment_id',
+            how='left',
+            suffixes=('_uncert', '_batch')
         )
-        # Convert boolean to int for correlation calculations (True->1, False->0)
-        merged['success_numeric'] = merged['success'].astype(float)
+        
+        # Resolve conflicts: prioritize batch values, fall back to uncertainty log values
+        if 'n_objects_batch' in merged.columns:
+            merged['n_objects'] = merged['n_objects_batch'].fillna(merged['n_objects_uncert'])
+            merged.drop(['n_objects_uncert', 'n_objects_batch'], axis=1, inplace=True)
+        
+        if 'model_category_batch' in merged.columns:
+            merged['model_category'] = merged['model_category_batch'].fillna(merged['model_category_uncert'])
+            merged.drop(['model_category_uncert', 'model_category_batch'], axis=1, inplace=True)
+    else:
+        # Add empty columns for batch-specific fields if no batch data
+        merged['batch_id'] = None
+        merged['query'] = None
+        merged['prompt_type'] = None
+    
+    # Merge experiment metrics (success, attempts, etc.) - THIS IS THE KEY ADDITION
+    if metrics_df is not None and not metrics_df.empty:
+        # Select relevant columns from metrics
+        metrics_cols = ['experiment_id', 'success', 'attempts']
+        metrics_cols_existing = [col for col in metrics_cols if col in metrics_df.columns]
+        
+        merged = merged.merge(
+            metrics_df[metrics_cols_existing],
+            on='experiment_id',
+            how='left'
+        )
+        
+        # Ensure success column is boolean/binary
+        if 'success' in merged.columns:
+            merged['success'] = merged['success'].apply(
+                lambda x: bool(x) if pd.notna(x) and x != '' else np.nan
+            )
+            # Convert boolean to int for correlation calculations (True->1, False->0)
+            merged['success_numeric'] = merged['success'].astype(float)
+    else:
+        # Add empty columns if no metrics data
+        merged['success'] = None
+        merged['attempts'] = None
     
     return merged
 
@@ -162,6 +256,7 @@ def clean_confidence_data(df: pd.DataFrame) -> pd.DataFrame:
     
     return df_clean
 
+
 def calculate_overall_confidence(df: pd.DataFrame) -> pd.DataFrame:
     """Calculate overall confidence across all stages"""
     # First clean the data (remove -1 values)
@@ -176,53 +271,85 @@ def calculate_overall_confidence(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
+
 def filter_dataframe(df: pd.DataFrame, filters: Dict) -> pd.DataFrame:
     """Apply filters to dataframe"""
     filtered = df.copy()
     
+    # Batch ID filter - include None/NaN if 'All' selected
     if filters.get('batch_ids') and None not in filters['batch_ids']:
-        filtered = filtered[filtered['batch_id'].isin(filters['batch_ids'])]
+        if 'batch_id' in filtered.columns:
+            filtered = filtered[filtered['batch_id'].isin(filters['batch_ids'])]
     
+    # Experiment group filter - only filter if groups are selected AND column exists
     if filters.get('experiment_groups'):
-        filtered = filtered[filtered['experiment_group'].isin(filters['experiment_groups'])]
+        if 'experiment_group' in filtered.columns:
+            # Include rows where experiment_group matches OR is NaN (individual logs)
+            mask = filtered['experiment_group'].isin(filters['experiment_groups']) | filtered['experiment_group'].isna()
+            filtered = filtered[mask]
     
+    # Prompt type filter - include NaN values
     if filters.get('prompt_types'):
-        filtered = filtered[filtered['prompt_type'].isin(filters['prompt_types'])]
+        if 'prompt_type' in filtered.columns:
+            mask = filtered['prompt_type'].isin(filters['prompt_types']) | filtered['prompt_type'].isna()
+            filtered = filtered[mask]
     
+    # Model name filter - include NaN values
     if filters.get('model_names'):
-        # Check any of the model columns
-        model_mask = (
-            filtered['grounder_model'].isin(filters['model_names']) |
-            filtered['planner_model'].isin(filters['model_names']) |
-            filtered['ranker_model'].isin(filters['model_names'])
-        )
-        filtered = filtered[model_mask]
+        model_mask = pd.Series([False] * len(filtered), index=filtered.index)
+        has_any_model = False
+        for col in ['grounder_model', 'planner_model', 'ranker_model']:
+            if col in filtered.columns:
+                has_any_model = True
+                # Match selected models OR is NaN
+                model_mask |= filtered[col].isin(filters['model_names']) | filtered[col].isna()
+        
+        if has_any_model:
+            filtered = filtered[model_mask]
     
+    # Model category filter - handle both string and list (comma-separated)
     if filters.get('model_categories'):
-        filtered = filtered[filtered['model_category'].isin(filters['model_categories'])]
+        if 'model_category' in filtered.columns:
+            selected_cats = filters['model_categories']
+            
+            # Create mask that checks if any selected category is in the model_category
+            def matches_category(cat_value):
+                if pd.isna(cat_value):
+                    return True  # Include NaN
+                # Split comma-separated categories
+                cats = [c.strip() for c in str(cat_value).split(',')]
+                # Check if any selected category matches
+                return any(sel_cat in cats for sel_cat in selected_cats)
+            
+            mask = filtered['model_category'].apply(matches_category)
+            filtered = filtered[mask]
     
+    # Success filter - only apply if not 'All'
     if filters.get('success_filter') != 'All':
-        if filters.get('success_filter') == 'Success':
-            filtered = filtered[filtered['success'] == True]
-        elif filters.get('success_filter') == 'Failure':
-            filtered = filtered[filtered['success'] == False]
+        if 'success' in filtered.columns:
+            if filters.get('success_filter') == 'Success':
+                filtered = filtered[filtered['success'] == True]
+            elif filters.get('success_filter') == 'Failure':
+                filtered = filtered[filtered['success'] == False]
+            # Note: NaN values will be excluded when filtering by Success/Failure
     
+    # Date range filter
     if filters.get('date_range'):
         start_date, end_date = filters['date_range']
         if 'date' in filtered.columns:
-            filtered = filtered[
-                (filtered['date'] >= start_date) & 
-                (filtered['date'] <= end_date)
-            ]
+            # Include rows within date range OR with NaN dates
+            mask = ((filtered['date'] >= start_date) & (filtered['date'] <= end_date)) | filtered['date'].isna()
+            filtered = filtered[mask]
     
+    # Number of objects filter
     if filters.get('n_objects_range'):
         min_obj, max_obj = filters['n_objects_range']
         if 'n_objects' in filtered.columns:
-            filtered = filtered[
-                (filtered['n_objects'] >= min_obj) & 
-                (filtered['n_objects'] <= max_obj)
-            ]
+            # Include rows within range OR with NaN n_objects
+            mask = ((filtered['n_objects'] >= min_obj) & (filtered['n_objects'] <= max_obj)) | filtered['n_objects'].isna()
+            filtered = filtered[mask]
     
+    # Query search filter
     if filters.get('query_search'):
         if 'query' in filtered.columns:
             filtered = filtered[
@@ -231,7 +358,6 @@ def filter_dataframe(df: pd.DataFrame, filters: Dict) -> pd.DataFrame:
             ]
     
     return filtered
-
 
 def calculate_success_rate(df: pd.DataFrame, group_by: Optional[str] = None) -> pd.DataFrame:
     """Calculate success rate, optionally grouped by a column"""

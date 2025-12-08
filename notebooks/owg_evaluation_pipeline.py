@@ -4,7 +4,7 @@ OWG Evaluation Pipeline - Command Line Script
 Author: Vanessa (converted to CLI by Assistant)
 
 Usage:
-    python notebooks/owg_evaluation_pipeline.py --seed 42 --config config/pyb/OWG_mod.yaml --query "Remove the smallest object" --visualise-simulation False
+    python notebooks/owg_evaluation_pipeline.py --seed 42 --config config/pyb/user_defined/config_20251206_222710.yaml --query "Remove the smallest object" --headless --n-objects 9 --output-dir output/
 """
 
 import argparse
@@ -306,6 +306,8 @@ def main():
         n_objects=args.n_objects
     )
     print(f"⚠️  Estimated difficulty: {difficulty_label} ({difficulty_score:.2f})")    
+
+    tracker.set_n_objects(args.n_objects)  # ADD
 
     tracker.set_model_settings({
         "grounder": grounder.get_model_params(),

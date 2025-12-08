@@ -5,6 +5,19 @@ from typing import List, Dict, Optional, Any
 from collections import defaultdict
 import hashlib
 
+MODEL_CONFIGS = {
+    "gpt-4o": {
+        "model_name": "gpt-4o",
+        "category": "large_vlm",
+        "expected_cost_per_call": 0.006
+    },
+    "gpt-4o-mini": {
+        "model_name": "gpt-4o-mini", 
+        "category": "small_vlm",
+        "expected_cost_per_call": 0.0015
+    }
+}
+
 def generate_experiment_id(seed, config_path, timestamp):
     """Generate unique experiment ID from seed, config, and timestamp"""
     config_hash = hashlib.md5(config_path.encode()).hexdigest()[:8]
@@ -60,8 +73,9 @@ class ExperimentTracker:
         self.experiment_group = experiment_group  # ADD
         self.metadata = defaultdict(list)  # module_name: [metadata_step1, metadata_step2, ...]
         self.model_settings = {}           # e.g., from get_model_params()
-        # self.prompt_variants = []          # list of prompt types
+        self.model_category = []          # e.g., "large_vlm", "small_vlm"
         self.prompt_name = {}         # prompt name
+        self.n_objects = 0               # number of objects in the scenario
         self.step_counters = defaultdict(int)  # internal counter per module for iteration tracking
 
     def set_metadata(self, metadata_dict: Dict[str, Any], module_name: Optional[str] = None):
@@ -75,23 +89,45 @@ class ExperimentTracker:
 
     def set_model_settings(self, settings_dict: Dict[str, Any]):
         self.model_settings = settings_dict
+        self.model_category = self._compute_model_categories()
 
+    def _compute_model_categories(self):
+        """Extract unique model categories from all stages"""
+        categories = []
+        for stage_name, stage_config in self.model_settings.items():
+            model_name = stage_config.get("model_name", "unknown")
+            category = MODEL_CONFIGS.get(model_name, {}).get("category", "unknown")
+            if category not in categories and category != "unknown":
+                categories.append(category)
+        
+        # Return sorted list for consistency
+        return sorted(categories) if categories else ["unknown"]
+    
     def set_prompt_variants(self, variants: List[str]):
         self.prompt_variants = variants
 
     def set_prompt_name(self, name: str):
         self.prompt_name = name
 
+    def set_n_objects(self, n: int):
+        self.n_objects = n
+
     def get_summary(self):
         return {
             "metadata": dict(self.metadata),
             "model": self.model_settings,
+            "model_category": self.model_category,
             # "prompt_variants": self.prompt_variants
-            "prompt_name": self.prompt_name
+            "prompt_name": self.prompt_name,
+            "n_objects": self.n_objects
         }
 
     def get_prompt_variants(self):
         return str(self.prompt_variants)    
+    
+    def get_model_category(self):
+        """Returns the computed model category list"""
+        return self.model_category
 
     def save_uncertainty_log(self, tracker_summary, save_path="logs/uncertainty_logs.jsonl"):
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -102,7 +138,9 @@ class ExperimentTracker:
             "metadata": tracker_summary.get("metadata", {}),
             "model": tracker_summary.get("model", {}),
             # "prompt_variants": tracker_summary.get("prompt_variants", {}),
+            "model_category": tracker_summary.get("model_category", []),  # ADD THIS
             "prompt_name": tracker_summary.get("prompt_name", {}),
+            "n_objects": tracker_summary.get("n_objects", {})
         }
         with open(save_path, "a") as f:
             f.write(json.dumps(record) + "\n")
