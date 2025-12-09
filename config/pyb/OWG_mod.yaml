@@ -92,11 +92,11 @@ planning:
       polygon_thickness: 1
 
   request:
-    model_name: 'llava'
+    model_name: 'qwen2.5vl'
     detail: 'auto'
     temperature: 0.0
     n: 1
-    max_tokens: 512
+    max_tokens: 4096
 
 
 grasping:
@@ -140,9 +140,9 @@ grasping:
       polygon_thickness: 2
 
   request:
-    model_name: 'llava'
+    model_name: 'gpt-4o'
     detail: 'auto'
     temperature: 0.0
     n: 1
-    max_tokens: 512
+    max_tokens: 4096
     logprobs: True
