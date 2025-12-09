@@ -7,7 +7,7 @@ image_size_w: 448
 image_crop: null
 
 grounding:
-  prompt_name: 'referring_segmentation_cautious'
+  prompt_name: 'referring_segmentation_base'
   prompt_template: "Description: {user_input}"
   # prompt_variants: ["_cautious"]
 
@@ -54,7 +54,7 @@ grounding:
 
 
 planning:
-  prompt_name: 'grasp_planning_confidence'
+  prompt_name: 'grasp_planning_base'
   prompt_template: 'Task instruction: "Target object {user_input}".'
   response_format: 'json'
   # prompt_variants: ["_confidence"]
@@ -92,17 +92,17 @@ planning:
       polygon_thickness: 1
 
   request:
-    model_name: 'gpt-4o'
+    model_name: 'llava'
     detail: 'auto'
     temperature: 0.0
-    n: 2
-    max_tokens: 256
+    n: 1
+    max_tokens: 512
 
 
 grasping:
   crop_square_size: 196
 
-  prompt_name: 'grasp_ranking_uncertainty_description'
+  prompt_name: 'grasp_ranking_base'
   prompt_template: "Rank the grasp poses."
 
   use_3d_prompt: False
@@ -140,9 +140,9 @@ grasping:
       polygon_thickness: 2
 
   request:
-    model_name: 'gpt-4o'
+    model_name: 'llava'
     detail: 'auto'
     temperature: 0.0
-    n: 2
-    max_tokens: 8192
+    n: 1
+    max_tokens: 512
     logprobs: True
