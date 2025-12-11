@@ -47,9 +47,9 @@ grounding:
     model_name: 'gpt-4o'
     detail: 'auto'
     temperature: 0.1
-    n: 2
+    n: 1
     logprobs: True
-    max_tokens: 512
+    max_tokens: 4096
     seed: 12
 
 
@@ -92,9 +92,9 @@ planning:
       polygon_thickness: 1
 
   request:
-    model_name: 'qwen2.5vl'
+    model_name: 'llama3.2-vision-11b'
     detail: 'auto'
-    temperature: 0.0
+    temperature: 0.1
     n: 1
     max_tokens: 4096
 
@@ -140,9 +140,9 @@ grasping:
       polygon_thickness: 2
 
   request:
-    model_name: 'gpt-4o'
+    model_name: 'llama3.2-vision-11b'
     detail: 'auto'
-    temperature: 0.0
+    temperature: 0.1
     n: 1
     max_tokens: 4096
     logprobs: True

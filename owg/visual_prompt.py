@@ -469,16 +469,11 @@ class VisualPrompterPlanning(VisualPrompterGrounding):
 
     def parse_response_json(self, response: Union[str, List[str]], data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Parses one or more LLM-generated responses, extracting a JSON-formatted plan and associated metadata.
-
-        Args:
-            response: A string or list of strings (LLM responses).
-            data: Additional input data (not directly used here, but kept for extensibility).
-
-        Returns:
-            A dictionary with:
-                - plan: List of parsed steps (as dicts)
-                - metadata: Dict with uncertainty/confidence/entropy info
+        Robust parser for LLM-generated plans. Extracts JSON from:
+        - ```json ... ```
+        - generic code fences
+        - inline JSON-like structures
+        - single action dicts (auto-wrapped into list)
         """
         if isinstance(response, str):
             response = [response]
@@ -489,49 +484,136 @@ class VisualPrompterPlanning(VisualPrompterGrounding):
             plan = []
             metadata = {}
 
-            # --- Extract JSON block from response ---
-            match = re.search(r"Plan:\s*```json(.*?)```", r, re.DOTALL)
-            if match:
-                json_str = match.group(1).strip().replace("'", '"')
-                try:
-                    plan = json.loads(json_str)
-                except json.JSONDecodeError as e:
-                    print(f"[parse_response_json] JSON decode error: {e}")
-                    continue
-            else:
-                print("[parse_response_json] No JSON plan block found in response.")
-                continue
+            raw = r  # work with the full raw model output
 
-            metadata = UncertaintyAnalyzer.extract_metadata(r)
-            parsed_results.append({
-                "plan": plan,
-                "metadata": metadata
-            })
+            # ------------------------------------------------------------
+            # 1. Try to extract ```json ...``` block (most strict)
+            # ------------------------------------------------------------
+            match = re.search(r"```json(.*?)```", raw, re.DOTALL | re.IGNORECASE)
+            if match:
+                json_text = match.group(1).strip()
+                cleaned = self._clean_json_like(json_text)
+                plan = self._try_parse_json(cleaned)
+                if plan is not None:
+                    metadata = UncertaintyAnalyzer.extract_metadata(r)
+                    parsed_results.append({"plan": plan, "metadata": metadata})
+                    continue  # stop this iteration → parsed successfully
+
+            # ------------------------------------------------------------
+            # 2. Fallback: extract any ``` ... ``` block
+            # ------------------------------------------------------------
+            match = re.search(r"```(.*?)```", raw, re.DOTALL)
+            if match:
+                json_text = match.group(1).strip()
+                cleaned = self._clean_json_like(json_text)
+                plan = self._try_parse_json(cleaned)
+                if plan is not None:
+                    metadata = UncertaintyAnalyzer.extract_metadata(r)
+                    parsed_results.append({"plan": plan, "metadata": metadata})
+                    continue
+
+            # ------------------------------------------------------------
+            # 3. Fallback: extract inline list:  [ {...}, {...} ]
+            # ------------------------------------------------------------
+            match = re.search(r"\[(.*?)\]", raw, re.DOTALL)
+            if match:
+                json_text = "[" + match.group(1) + "]"
+                cleaned = self._clean_json_like(json_text)
+                plan = self._try_parse_json(cleaned)
+                if plan is not None:
+                    metadata = UncertaintyAnalyzer.extract_metadata(r)
+                    parsed_results.append({"plan": plan, "metadata": metadata})
+                    continue
+
+            # ------------------------------------------------------------
+            # 4. Fallback: extract single dict { ... } and wrap into list
+            # ------------------------------------------------------------
+            match = re.search(r"\{.*?\}", raw, re.DOTALL)
+            if match:
+                json_text = "[" + match.group(0) + "]"
+                cleaned = self._clean_json_like(json_text)
+                plan = self._try_parse_json(cleaned)
+                if plan is not None:
+                    metadata = UncertaintyAnalyzer.extract_metadata(r)
+                    parsed_results.append({"plan": plan, "metadata": metadata})
+                    continue
+
+            # If all fallbacks fail:
+            print("[parse_response_json] No valid JSON plan found in response:", raw)
+            parsed_results.append({"plan": [], "metadata": {}})
 
         if not parsed_results:
             return None
 
+        # use the first result
         result = parsed_results[0]
         plan = result["plan"]
         metadata = result["metadata"]
 
-        # if len(response) > 1:
-        #     result["metadata"]["posterior"] = UncertaintyAnalyzer.calculate_posterior(response)
-        #     result["metadata"]["entropy"] = UncertaintyAnalyzer.calculate_entropy(result["metadata"]["posterior"])
-        #     print(f"[Planning] Entropy across {len(response)} completions: {result['metadata']['entropy']:.2f} bits")
+        # ------------------------------------------------------------
+        # Keep your uncertainty logic unchanged
+        # ------------------------------------------------------------
         if len(response) > 1:
             posterior = UncertaintyAnalyzer.calculate_posterior(response)
             entropy_val = UncertaintyAnalyzer.compute_entropy(posterior)
 
-            result["metadata"].update({
+            metadata.update({
                 "posterior": posterior,
                 "entropy": entropy_val
             })
             print(f"[Planning] Posterior across {len(response)} completions: {posterior}")
             print(f"[Planning] Entropy across {len(response)} completions: {entropy_val:.2f} bits")
 
-
         return plan, metadata
+
+
+
+    # ------------------------------------------------------------
+    # Helper functions added directly below your class:
+    # ------------------------------------------------------------
+
+    def _clean_json_like(self, text: str) -> str:
+        """
+        Cleans JSON-like text produced by LLMs so json.loads can parse it.
+        Handles bullet points, single quotes, trailing commas, comments, etc.
+        """
+        cleaned = text
+
+        # Remove bullet points like "* {...}"
+        cleaned = re.sub(r"^\s*[\*\-]\s*", "", cleaned, flags=re.MULTILINE)
+
+        # Replace single quotes with double quotes
+        cleaned = cleaned.replace("'", "\"")
+
+        # Remove trailing commas before closing brackets
+        cleaned = re.sub(r",\s*([\]}])", r"\1", cleaned)
+
+        # Strip comments (rare but safe)
+        cleaned = re.sub(r"//.*?$", "", cleaned, flags=re.MULTILINE)
+
+        cleaned = cleaned.strip()
+        return cleaned
+
+
+    def _try_parse_json(self, text: str):
+        """
+        Attempt json.loads and return parsed result or None.
+        Ensures text is wrapped in list brackets if needed.
+        """
+
+        # Ensure entire text is an array
+        t = text.strip()
+        if not t.startswith("["):
+            t = "[" + t
+        if not t.endswith("]"):
+            t = t + "]"
+
+        try:
+            return json.loads(t)
+        except json.JSONDecodeError as e:
+            print("[_try_parse_json] JSON decode failed:", e)
+            print("Text was:", t)
+            return None
 
 
 class VisualPrompterGraspRanking(VisualPrompter):

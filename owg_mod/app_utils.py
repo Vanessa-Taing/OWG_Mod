@@ -169,40 +169,52 @@ def load_batch_logs(experiments_dir: str = "~/OWG/experiments") -> pd.DataFrame:
 
 
 def merge_logs(uncertainty_df: pd.DataFrame, batch_df: pd.DataFrame, metrics_df: pd.DataFrame = None) -> pd.DataFrame:
-    """Merge uncertainty logs with batch information and experiment metrics"""
+    """
+    Merge uncertainty logs with batch information and experiment metrics.
+    
+    Note: This handles one-to-many relationships:
+    - One experiment_id can have multiple uncertainty log entries (multiple queries)
+    - One experiment_id can have multiple metric entries (multiple actions)
+    
+    We aggregate metrics per experiment_id before merging.
+    """
     if uncertainty_df.empty:
         return pd.DataFrame()
     
-    # First, extract n_objects and model_category from uncertainty logs if they exist
+    # Extract n_objects and model_category from uncertainty logs if they exist
     if 'n_objects' not in uncertainty_df.columns:
         uncertainty_df['n_objects'] = None
     if 'model_category' not in uncertainty_df.columns:
         uncertainty_df['model_category'] = None
     
-    # Start with uncertainty_df as base
+    # Start with uncertainty_df as base (keep all records, including multiple queries per experiment)
     merged = uncertainty_df.copy()
+    
+    # Add a unique row identifier for each uncertainty log entry
+    merged['log_entry_id'] = range(len(merged))
     
     # Merge batch data if available
     if not batch_df.empty:
+        # Batch data is typically one-to-one with experiment_id
+        batch_df_dedup = batch_df.drop_duplicates(subset=['experiment_id'], keep='last')
+        
         batch_cols = ['experiment_id', 'batch_id', 'query', 'prompt_type']
         
-        # Only merge n_objects and model_category from batch_df if they exist
-        if 'n_objects' in batch_df.columns:
+        if 'n_objects' in batch_df_dedup.columns:
             batch_cols.append('n_objects')
-        if 'model_category' in batch_df.columns:
+        if 'model_category' in batch_df_dedup.columns:
             batch_cols.append('model_category')
         
-        # Select only columns that exist in batch_df
-        batch_cols_existing = [col for col in batch_cols if col in batch_df.columns]
+        batch_cols_existing = [col for col in batch_cols if col in batch_df_dedup.columns]
         
         merged = merged.merge(
-            batch_df[batch_cols_existing],
+            batch_df_dedup[batch_cols_existing],
             on='experiment_id',
             how='left',
             suffixes=('_uncert', '_batch')
         )
         
-        # Resolve conflicts: prioritize batch values, fall back to uncertainty log values
+        # Resolve conflicts
         if 'n_objects_batch' in merged.columns:
             merged['n_objects'] = merged['n_objects_batch'].fillna(merged['n_objects_uncert'])
             merged.drop(['n_objects_uncert', 'n_objects_batch'], axis=1, inplace=True)
@@ -211,19 +223,26 @@ def merge_logs(uncertainty_df: pd.DataFrame, batch_df: pd.DataFrame, metrics_df:
             merged['model_category'] = merged['model_category_batch'].fillna(merged['model_category_uncert'])
             merged.drop(['model_category_uncert', 'model_category_batch'], axis=1, inplace=True)
     else:
-        # Add empty columns for batch-specific fields if no batch data
         merged['batch_id'] = None
         merged['query'] = None
         merged['prompt_type'] = None
     
-    # Merge experiment metrics (success, attempts, etc.) - THIS IS THE KEY ADDITION
+    # Merge experiment metrics - AGGREGATE FIRST
     if metrics_df is not None and not metrics_df.empty:
-        # Select relevant columns from metrics
-        metrics_cols = ['experiment_id', 'success', 'attempts']
-        metrics_cols_existing = [col for col in metrics_cols if col in metrics_df.columns]
+        # Aggregate metrics per experiment_id
+        # Success = True if ANY action succeeded (or custom logic)
+        # Attempts = total number of actions/attempts
+        
+        metrics_agg = metrics_df.groupby('experiment_id').agg({
+            'success': lambda x: x.any() if x.notna().any() else np.nan,  # True if any action succeeded
+            'attempts': 'sum' if 'attempts' in metrics_df.columns else 'count'  # Total attempts
+        }).reset_index()
+        
+        # Alternative: Take the LAST action's success status (final outcome)
+        # metrics_agg = metrics_df.sort_values('timestamp').groupby('experiment_id').last().reset_index()
         
         merged = merged.merge(
-            metrics_df[metrics_cols_existing],
+            metrics_agg,
             on='experiment_id',
             how='left'
         )
@@ -233,10 +252,8 @@ def merge_logs(uncertainty_df: pd.DataFrame, batch_df: pd.DataFrame, metrics_df:
             merged['success'] = merged['success'].apply(
                 lambda x: bool(x) if pd.notna(x) and x != '' else np.nan
             )
-            # Convert boolean to int for correlation calculations (True->1, False->0)
             merged['success_numeric'] = merged['success'].astype(float)
     else:
-        # Add empty columns if no metrics data
         merged['success'] = None
         merged['attempts'] = None
     

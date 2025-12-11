@@ -357,7 +357,9 @@ with tabs[3]:
             with col1:
                 st.metric("Uncertainty Logs", len(uncertainty_df))
                 if 'experiment_id' in uncertainty_df.columns:
-                    st.caption(f"Unique IDs: {uncertainty_df['experiment_id'].nunique()}")
+                    unique_ids = uncertainty_df['experiment_id'].nunique()
+                    st.caption(f"Unique experiment IDs: {unique_ids}")
+                    st.caption(f"Avg queries per exp: {len(uncertainty_df)/unique_ids:.1f}")
             with col2:
                 st.metric("Batch Logs", len(batch_df))
                 if not batch_df.empty and 'experiment_id' in batch_df.columns:
@@ -365,7 +367,17 @@ with tabs[3]:
             with col3:
                 st.metric("Metrics Logs", len(metrics_df))
                 if not metrics_df.empty and 'experiment_id' in metrics_df.columns:
-                    st.caption(f"Unique IDs: {metrics_df['experiment_id'].nunique()}")
+                    unique_ids = metrics_df['experiment_id'].nunique()
+                    st.caption(f"Unique experiment IDs: {unique_ids}")
+                    st.caption(f"Avg actions per exp: {len(metrics_df)/unique_ids:.1f}")
+            
+            st.info("""
+            📝 Note: Multiple entries per experiment ID are expected:
+            - **Uncertainty logs**: Multiple queries per experiment (e.g., 3 queries in batch tests)
+            - **Metrics logs**: Multiple actions per experiment (e.g., remove then pick)
+            
+            The dashboard aggregates metrics per experiment while preserving all uncertainty query records.
+            """)
         
         # Merge datasets
         df = merge_logs(uncertainty_df, batch_df, metrics_df)

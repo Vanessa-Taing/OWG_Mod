@@ -17,7 +17,8 @@ SUPPORTED_MODELS = [
     # Can easily add more models supported by LiteLLM
     "claude-3-sonnet", "gemini-pro-vision", "gpt-4o-mini",
 
-    "gemma3:12b", "gemma3:4b", "qwen2.5vl", "minicpm-v:8b"
+    "gemma3-12b", "gemma3-4b", "qwen2.5vl", "minicpm-v-8b",
+    "qwen3-vl-8b", "llama3.2-vision-11b"
 ]
 
 DEFAULT_ENDPOINTS = [

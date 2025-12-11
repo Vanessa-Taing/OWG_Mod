@@ -26,12 +26,22 @@ model_list:
     model_info:
       stream: true
 
+  - model_name: llama3.2-vision-11b
+    litellm_params:
+      model: ollama/llama3.2-vision:11b
+      api_base: http://localhost:11434
+
   - model_name: qwen2.5vl
     litellm_params:
       model: ollama/qwen2.5vl:latest
       api_base: http://localhost:11434
 
-  - model_name: minicpm-v:8b
+  - model_name: qwen3-vl-8b
+    litellm_params:
+      model: ollama/qwen3-vl:8b
+      api_base: http://localhost:11434
+
+  - model_name: minicpm-v-8b
     litellm_params:
       model: ollama/minicpm-v:8b
       api_base: http://localhost:11434

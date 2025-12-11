@@ -15,8 +15,51 @@ MODEL_CONFIGS = {
         "model_name": "gpt-4o-mini", 
         "category": "small_vlm",
         "expected_cost_per_call": 0.0015
+    },
+
+    "llava-7b": {
+        "model_name": "llava",
+        "category": "small_vlm",
+        "expected_cost_per_call": 0
+    },
+
+    "gemma3-12b": {
+        "model_name": "gemma3-12b",
+        "category": "small_vlm",
+        "expected_cost_per_call": 0
+    },
+
+    "gemma3-4b": {
+        "model_name": "gemma3-4b",
+        "category": "small_vlm",
+        "expected_cost_per_call": 0
+    },
+
+    "qwen2.5-vl-7b": {
+        "model_name": "qwen2.5-vl",
+        "category": "small_vlm",
+        "expected_cost_per_call": 0
+    },
+
+    "minicpm-v-8b": {
+        "model_name": "minicpm-v-8b",
+        "category": "small_vlm",
+        "expected_cost_per_call": 0
+    },
+
+    "qwen3-vl-8b": {
+        "model_name": "qwen3-vl-8b",
+        "category": "small_vlm",
+        "expected_cost_per_call": 0
+    },
+
+    "llama3.2-vision-11b": {
+        "model_name": "llama3.2-vision-11b",
+        "category": "large_vlm",
+        "expected_cost_per_call": 0
     }
 }
+
 
 def generate_experiment_id(seed, config_path, timestamp):
     """Generate unique experiment ID from seed, config, and timestamp"""
