@@ -187,7 +187,7 @@ def merge_logs(uncertainty_df: pd.DataFrame, batch_df: pd.DataFrame, metrics_df:
     if 'model_category' not in uncertainty_df.columns:
         uncertainty_df['model_category'] = None
     
-    # Start with uncertainty_df as base (keep all records, including multiple queries per experiment)
+    # Start with uncertainty_df as base
     merged = uncertainty_df.copy()
     
     # Add a unique row identifier for each uncertainty log entry
@@ -200,10 +200,13 @@ def merge_logs(uncertainty_df: pd.DataFrame, batch_df: pd.DataFrame, metrics_df:
         
         batch_cols = ['experiment_id', 'batch_id', 'query', 'prompt_type']
         
+        # Add optional columns if they exist
         if 'n_objects' in batch_df_dedup.columns:
             batch_cols.append('n_objects')
         if 'model_category' in batch_df_dedup.columns:
             batch_cols.append('model_category')
+        if 'attempts' in batch_df_dedup.columns:  # ADD: Pipeline attempts
+            batch_cols.append('attempts')
         
         batch_cols_existing = [col for col in batch_cols if col in batch_df_dedup.columns]
         
@@ -222,24 +225,44 @@ def merge_logs(uncertainty_df: pd.DataFrame, batch_df: pd.DataFrame, metrics_df:
         if 'model_category_batch' in merged.columns:
             merged['model_category'] = merged['model_category_batch'].fillna(merged['model_category_uncert'])
             merged.drop(['model_category_uncert', 'model_category_batch'], axis=1, inplace=True)
+        
+        # Note: 'attempts' from batch stays as is (pipeline-level retries)
     else:
         merged['batch_id'] = None
         merged['query'] = None
         merged['prompt_type'] = None
+        merged['attempts'] = None  # ADD: Initialize if no batch data
     
     # Merge experiment metrics - AGGREGATE FIRST
     if metrics_df is not None and not metrics_df.empty:
-        # Aggregate metrics per experiment_id
-        # Success = True if ANY action succeeded (or custom logic)
-        # Attempts = total number of actions/attempts
+        # Build aggregation dictionary dynamically based on available columns
+        agg_dict = {
+            'success': lambda x: x.iloc[-1] if len(x) > 0 else np.nan  # Last action's success
+        }
         
-        metrics_agg = metrics_df.groupby('experiment_id').agg({
-            'success': lambda x: x.any() if x.notna().any() else np.nan,  # True if any action succeeded
-            'attempts': 'sum' if 'attempts' in metrics_df.columns else 'count'  # Total attempts
-        }).reset_index()
+        # Add retries aggregation if column exists (grasp-level retries)
+        if 'retries' in metrics_df.columns:
+            agg_dict['retries'] = 'sum'  # Total grasp retries across all actions
         
-        # Alternative: Take the LAST action's success status (final outcome)
-        # metrics_agg = metrics_df.sort_values('timestamp').groupby('experiment_id').last().reset_index()
+        # Add other useful metrics
+        if 'grasp_type' in metrics_df.columns:
+            agg_dict['grasp_type'] = lambda x: x.iloc[-1]  # Last grasp type
+        
+        if 'scenario_difficulty' in metrics_df.columns:
+            agg_dict['scenario_difficulty'] = lambda x: x.iloc[0]  # Scenario difficulty (same for all)
+        
+        if 'difficulty_score' in metrics_df.columns:
+            agg_dict['difficulty_score'] = lambda x: x.iloc[0]  # Difficulty score
+        
+        # Sort by timestamp to ensure "last" is actually the final action
+        if 'timestamp' in metrics_df.columns:
+            metrics_df = metrics_df.sort_values('timestamp')
+        
+        metrics_agg = metrics_df.groupby('experiment_id').agg(agg_dict).reset_index()
+        
+        # Rename retries to grasp_retries for clarity
+        if 'retries' in metrics_agg.columns:
+            metrics_agg.rename(columns={'retries': 'grasp_retries'}, inplace=True)
         
         merged = merged.merge(
             metrics_agg,
@@ -255,7 +278,7 @@ def merge_logs(uncertainty_df: pd.DataFrame, batch_df: pd.DataFrame, metrics_df:
             merged['success_numeric'] = merged['success'].astype(float)
     else:
         merged['success'] = None
-        merged['attempts'] = None
+        merged['grasp_retries'] = None
     
     return merged
 

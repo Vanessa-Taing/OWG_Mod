@@ -570,8 +570,8 @@ with tabs[3]:
             st.metric("Avg Confidence", "N/A")
     
     with col4:
-        if safe_column_exists(filtered_df, 'attempts'):
-            avg_attempts = filtered_df['attempts'].mean()
+        if safe_column_exists(filtered_df, 'retries'):
+            avg_attempts = filtered_df['retries'].mean()
             st.metric("Avg Attempts", f"{avg_attempts:.2f}")
         else:
             st.metric("Avg Attempts", "N/A")
@@ -1048,7 +1048,7 @@ with tabs[3]:
     
     # Select columns to display
     display_cols = ['experiment_id', 'experiment_group', 'timestamp', 'success', 'overall_confidence']
-    display_cols += [col for col in ['prompt_type', 'model_category', 'batch_id', 'attempts', 'n_objects', 'query'] if col in filtered_df.columns]
+    display_cols += [col for col in ['prompt_type', 'model_category', 'batch_id', 'retries', 'n_objects', 'query'] if col in filtered_df.columns]
     
     available_cols = [col for col in display_cols if col in filtered_df.columns]
     
