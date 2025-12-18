@@ -21,7 +21,9 @@ class SystemPromptLibrary:
         for filename in os.listdir(self.prompt_dir):
             if filename.endswith(".txt"):
                 name = filename.replace(".txt", "")
-                with open(os.path.join(self.prompt_dir, filename), 'r') as f:
+                # Use UTF-8 explicitly so prompts with emoji and other unicode
+                # characters load correctly on Windows (cp1252 default) as well.
+                with open(os.path.join(self.prompt_dir, filename), "r", encoding="utf-8") as f:
                     prompts[name] = f.read()
                 print(f"[PromptLibrary] Loaded prompt: {name}")
         return prompts

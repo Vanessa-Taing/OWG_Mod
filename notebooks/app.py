@@ -147,7 +147,7 @@ with tabs[0]:
 
             display_cols = [c for c in default_cols + extra_cols if c in filtered_df.columns]
 
-            st.dataframe(filtered_df[display_cols], width='stretch', height=400)
+            st.dataframe(filtered_df[display_cols], use_container_width=True, height=400)
 
             # --- Summary Stats ---
             st.markdown("### 📊 Summary Stats")
@@ -199,8 +199,8 @@ with tabs[0]:
                     .properties(height=300)
                 )
 
-                st.altair_chart(cost_chart, width='stretch')
-                st.altair_chart(count_chart, width='stretch')
+                st.altair_chart(cost_chart, use_container_width=True)
+                st.altair_chart(count_chart, use_container_width=True)
 
             st.info("✅ Logs loaded successfully. Use filter expander above for model, status, or user.")
     else:
@@ -283,7 +283,7 @@ with tabs[1]:
         with save_col2:
             st.write("")  # Spacing
             st.write("")  # Spacing
-            save_btn = st.button("💾 Save", width='stretch')
+            save_btn = st.button("💾 Save", use_container_width=True)
         
         if save_btn:
             if not user_filename.strip():
@@ -400,8 +400,8 @@ with tabs[2]:
         filtered_df[
             ["timestamp", "object_id", "position", "success", "grasp_type", "retries"]
         ],
-        width="stretch",
-        height=400
+        use_container_width=True,
+        height=400,
     )
 
     # ------------------------------------------------------------------
@@ -448,7 +448,7 @@ with tabs[2]:
             .properties(height=300)
         )
 
-        st.altair_chart(chart, width="stretch")
+        st.altair_chart(chart, use_container_width=True)
 
     # ------------------------------------------------------------------
     # Timeline chart
@@ -472,7 +472,7 @@ with tabs[2]:
         .properties(height=300)
     )
 
-    st.altair_chart(timeline, width="stretch")
+    st.altair_chart(timeline, use_container_width=True)
 
 # 📊 Refined Uncertainty Analysis Dashboard with Statistical Tests
 with tabs[3]:
@@ -759,7 +759,7 @@ with tabs[3]:
                 fig.update_layout(height=400)
                 fig.update_yaxes(range=[-0.1, 1.1])  # Fix y-axis range
                 fig.update_xaxes(range=[0, 1])  # Fix x-axis range
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
             
             with col2:
                 # Correlation statistics
@@ -804,7 +804,7 @@ with tabs[3]:
                 )
                 fig.update_traces(texttemplate='%{text:.1%}', textposition='outside')
                 fig.update_layout(height=400, yaxis_range=[0, 1.1])
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
             
             with col2:
                 # Confidence by model category
@@ -827,12 +827,12 @@ with tabs[3]:
                         height=400,
                         yaxis_range=[0, 1.1]
                     )
-                    st.plotly_chart(fig, width='stretch')
+                    st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("Confidence data not available")
             
             # Show detailed statistics
-            st.dataframe(model_perf, width='stretch')
+            st.dataframe(model_perf, use_container_width=True)
         else:
             st.info("No model category data available for analysis")
     else:
@@ -872,7 +872,7 @@ with tabs[3]:
                 yaxis_title="Actual Accuracy",
                 height=400
             )
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig, use_container_width=True)
         
         with col2:
             st.markdown("**Calibration Metrics:**")
@@ -954,7 +954,7 @@ with tabs[3]:
                     labels={'group': 'Experiment Group', 'overall_confidence': 'Overall Confidence'}
                 )
                 fig.update_layout(height=400)
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Need at least 2 experiment groups for comparison")
     else:
@@ -1036,7 +1036,7 @@ with tabs[3]:
                 )
                 
                 fig.update_layout(height=400, showlegend=False)
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Need at least 2 model categories for comparison")
     else:
@@ -1074,7 +1074,7 @@ with tabs[3]:
                     posthoc_display = posthoc_df.copy()
                     posthoc_display['p_value'] = posthoc_display['p_value'].apply(lambda x: f"{x:.4f}")
                     posthoc_display['significant'] = posthoc_display['significant'].apply(lambda x: "Yes ✓" if x else "No")
-                    st.dataframe(posthoc_display, width='stretch')
+                    st.dataframe(posthoc_display, use_container_width=True)
             
             # Visualization
             fig = px.box(
@@ -1085,7 +1085,7 @@ with tabs[3]:
                 labels={'prompt_type': 'Prompt Type', 'overall_confidence': 'Overall Confidence'}
             )
             fig.update_layout(height=400)
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Need at least 2 prompt types for ANOVA")
     else:
@@ -1126,7 +1126,7 @@ with tabs[3]:
                 height=400,
                 yaxis_range=[0, 1.1]
             )
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Stage-wise confidence data not available")
     
@@ -1157,7 +1157,7 @@ with tabs[3]:
                 yaxis_title="Entropy",
                 height=400
             )
-            st.plotly_chart(fig, width='stretch')
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Stage-wise entropy data not available")
     
@@ -1179,7 +1179,7 @@ with tabs[3]:
                     labels={'overall_confidence': 'Overall Confidence', 'overall_entropy': 'Overall Entropy'}
                 )
                 fig.update_layout(height=400)
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
     
     # ===== SECTION E: INDIVIDUAL EXPERIMENT EXPLORER =====
     st.markdown("---")
@@ -1199,8 +1199,8 @@ with tabs[3]:
     
     st.dataframe(
         sorted_df,
-        width='stretch',
-        height=400
+        use_container_width=True,
+        height=400,
     )
     
     # Export functionality
@@ -1242,7 +1242,7 @@ with tabs[4]:
     litellm_col1, litellm_col2 = st.columns([2, 2])
 
     with litellm_col1:
-        if st.button("🔍 Check LiteLLM Status", width='stretch'):
+        if st.button("🔍 Check LiteLLM Status", use_container_width=True):
             with st.spinner("Checking LiteLLM server..."):
                 try:
                     result = check_litellm()   # <-- Clean call
@@ -1270,7 +1270,7 @@ with tabs[4]:
                     st.error(f"❌ Error checking LiteLLM: {e}")
     
     with litellm_col2:
-    #     if st.button("▶️ Start LiteLLM", width='stretch'):
+    #     if st.button("▶️ Start LiteLLM", use_container_width=True):
     #         with st.spinner("Starting LiteLLM server..."):
     #             try:
     #                 import subprocess
@@ -1531,11 +1531,11 @@ with tabs[4]:
     preview_col, save_col = st.columns(2)
     
     with preview_col:
-        if st.button("👁️ Preview Full Config YAML", width='stretch'):
+        if st.button("👁️ Preview Full Config YAML", use_container_width=True):
             st.session_state['show_config_preview'] = True
     
     with save_col:
-        if st.button("💾 Save Config", width='stretch'):
+        if st.button("💾 Save Config", use_container_width=True):
             import yaml
             from datetime import datetime
             
@@ -1759,7 +1759,7 @@ with tabs[4]:
     
     run_col1, run_col2 = st.columns([3, 1])
     with run_col1:
-        if st.button("▶️ Run Experiment Pipeline", width='stretch', type="primary"):
+        if st.button("▶️ Run Experiment Pipeline", use_container_width=True, type="primary"):
             if not st.session_state.get('litellm_running', False):
                 st.error("❌ LiteLLM is not running. Please start it first.")
             else:
@@ -1827,5 +1827,5 @@ with tabs[4]:
                         st.error(f"❌ Error running experiment: {e}")
     
     with run_col2:
-        if st.button("🔄 Restart PyBullet", width='stretch'):
+        if st.button("🔄 Restart PyBullet", use_container_width=True):
             st.info("PyBullet will be restarted when running the experiment")
