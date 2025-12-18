@@ -1,0 +1,47 @@
+{
+  "total_experiments": 45,
+  "successful": 43,
+  "failed": 2,
+  "by_prompt_type": {
+    "uncertainty_description": {
+      "total": 9,
+      "successful": 9,
+      "success_rate": 1.0
+    },
+    "cautious": {
+      "total": 9,
+      "successful": 8,
+      "success_rate": 0.8888888888888888
+    },
+    "baseline": {
+      "total": 9,
+      "successful": 8,
+      "success_rate": 0.8888888888888888
+    },
+    "hedging": {
+      "total": 9,
+      "successful": 9,
+      "success_rate": 1.0
+    },
+    "confidence": {
+      "total": 9,
+      "successful": 9,
+      "success_rate": 1.0
+    }
+  },
+  "by_model": {
+    "gpt-4o": {
+      "total": 45,
+      "successful": 43,
+      "success_rate": 0.9555555555555556
+    }
+  },
+  "by_n_objects": {
+    "12": {
+      "total": 45,
+      "successful": 43,
+      "success_rate": 0.9555555555555556
+    }
+  },
+  "average_runtime": null
+}

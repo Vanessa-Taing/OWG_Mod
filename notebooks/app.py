@@ -174,7 +174,6 @@ with tabs[0]:
 
 # --- TAB 2: PROMPT ENGINEERING (placeholder) ---
 with tabs[1]:
-    # --- Run Experiment ---
     st.subheader("🚀 Run Experiment with This Prompt")
     st.write("Design, modify, and experiment with OWG prompts interactively.")
     

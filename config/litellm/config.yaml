@@ -9,10 +9,21 @@ model_list:
       model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
 
-  - model_name: gpt-5-nano
+  - model_name: llama-3.2-90b
     litellm_params:
-      model: openai/gpt-5-nano
-      api_key: os.environ/OPENAI_API_KEY
+      model: nvidia_nim/meta/llama-3.2-90b-vision-instruct
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+  
+  # - model_name: cosmos
+  #   litellm_params:
+  #     model: nvidia_nim/nvidia/cosmos-reason1-7b
+  #     api_key: os.environ/NVIDIA_NIM_API_KEY
+  
+  - model_name: qwen3-vl-32b-instruct
+    litellm_params:
+      model: openai/qwen3-vl-32b-instruct
+      api_key: sk-33d8f296715e4c5f8267ccfd11991409
+      api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 
   - model_name: llava
     litellm_params:
@@ -48,4 +59,10 @@ model_list:
 
 litellm_settings:
   drop_params: true
+  num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
+  request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
+  fallbacks: [{"minicpm-v-8b": ["gpt-4o"]}, {"qwen3-vl-8b": ["gpt-4o"]}, {"qwen2.5vl": ["gpt-4o"]}, {"llama3.2-vision-11b": ["gpt-4o"]}, 
+    {"gemma3-4b": ["gpt-4o"]}, {"llava": ["gpt-4o"]}, {"gpt-4o-mini": ["gpt-4o"]}, {"gpt-4o": ["llama-3.2-90b"]}, {"llama-3.2-90b": ["qwen3-vl-32b-instruct"]}]
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
+  cooldown_time: 30 # how long to cooldown model if fails/min > allowed_fails
   callbacks: ..custom_callbacks.proxy_handler_instance
