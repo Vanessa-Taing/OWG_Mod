@@ -56,10 +56,6 @@ custom_available_prompts = custom_prompt_lib.list_available_prompts()
 st.set_page_config(page_title="OWG Experiment Dashboard", layout="wide")
 st.title("🧠 Open World Grasping — LLM Experiment Dashboard")
 
-#Debugging
-st.write("Resolved paths: (Debugging)")
-st.code(f"LOG_PATH = {LOG_PATH}\nMETRICS_PATH = {METRICS_PATH}\nUNCERTAINTY_PATH = {LOG_PATH_UNCERT}\nPROMPTS_PATH = {UNCERTAINTY_DIR} & {USER_PROMPT_DIR}")
-
 tabs = st.tabs(["🔍 Experiment Logs", "🧩 Prompt Engineering", "📈 Metrics Overview", "🧠 Uncertainty Analysis", "RUN EXPERIMENT"])
 
 # --- TAB 1: LITELLM LOGS ---
@@ -81,21 +77,60 @@ with tabs[0]:
 
             # --- Local Filters (tab-only, replaces sidebar) ---
             with st.expander("🔍 Filter LiteLLM Logs", expanded=True):
-                models = sorted(df["model"].dropna().unique()) if "model" in df.columns else []
-                statuses = sorted(df["status"].dropna().unique()) if "status" in df.columns else []
-                users = sorted([u for u in df["user"].dropna().unique() if u])  # skip empty strings
+                # models = sorted(df["model"].dropna().unique()) if "model" in df.columns else []
+                models = sorted(
+                    m for m in df["model"].astype(str).unique()
+                    if m.strip()
+                )
+                statuses = sorted(
+                    s for s in df["status"].astype(str).unique()
+                    if s.strip()
+                )
+
+                users = sorted(
+                    u for u in df["user"].astype(str).unique()
+                    if u.strip()
+                )
+                # statuses = sorted(df["status"].dropna().unique()) if "status" in df.columns else []
+                # users = sorted([u for u in df["user"].dropna().unique() if u])  # skip empty strings
 
                 col1, col2, col3 = st.columns(3)
-                selected_model = col1.multiselect("Model", models, default=models)
-                selected_status = col2.multiselect("Status", statuses, default=statuses)
-                selected_user = col3.multiselect("User", ["(none)"] + users, default=["(none)"] + users)
+                # selected_model = col1.multiselect("Model", models, default=models)
+                selected_model = col1.multiselect(
+                    "Model",
+                    options=["ALL"] + models,
+                    default=["ALL"]
+                )
+                selected_status = col2.multiselect(
+                    "Status",
+                    options=["ALL"] + statuses,
+                    default=["ALL"]
+                )
+
+                selected_user = col3.multiselect(
+                    "User",
+                    options=["ALL"] + users,
+                    default=["ALL"]
+                )
+                # selected_status = col2.multiselect("Status", statuses, default=statuses)
+                # selected_user = col3.multiselect("User", ["(none)"] + users, default=["(none)"] + users)
 
             df["user"] = df["user"].fillna("(none)")
-            filtered_df = df[
-                (df["model"].isin(selected_model)) &
-                (df["status"].isin(selected_status)) &
-                (df["user"].isin(selected_user))
-            ]
+            # filtered_df = df[
+            #     (df["model"].isin(selected_model)) &
+            #     (df["status"].isin(selected_status)) &
+            #     (df["user"].isin(selected_user))
+            # ]
+            filtered_df = df.copy()
+
+            if "ALL" not in selected_model:
+                filtered_df = filtered_df[filtered_df["model"].isin(selected_model)]
+
+            if "ALL" not in selected_status:
+                filtered_df = filtered_df[filtered_df["status"].isin(selected_status)]
+
+            if "ALL" not in selected_user:
+                filtered_df = filtered_df[filtered_df["user"].isin(selected_user)]
 
             # --- Display ---
             st.markdown("### 📋 Filtered LiteLLM Logs")
@@ -248,7 +283,7 @@ with tabs[1]:
         with save_col2:
             st.write("")  # Spacing
             st.write("")  # Spacing
-            save_btn = st.button("💾 Save", use_container_width=True)
+            save_btn = st.button("💾 Save", width='stretch')
         
         if save_btn:
             if not user_filename.strip():
@@ -267,77 +302,181 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("📈 Experiment Metrics Dashboard")
 
+    # ------------------------------------------------------------------
+    # Load data
+    # ------------------------------------------------------------------
     if not os.path.exists(METRICS_PATH):
         st.warning("No experiment log found. Run experiments to populate tracker logs.")
-    else:
-        with open(METRICS_PATH, "r") as f:
-            logs = [json.loads(line) for line in f if line.strip()]
+        st.stop()
 
-        if logs:
-            df_grasp = pd.DataFrame(logs)
-            df_grasp["timestamp"] = pd.to_datetime(df_grasp["timestamp"], errors="coerce")
-            df_grasp = df_grasp.sort_values("timestamp", ascending=False)
+    with open(METRICS_PATH, "r") as f:
+        logs = [json.loads(line) for line in f if line.strip()]
 
-            # --- Display Table ---
-            st.markdown("### 📋 Recent Grasp Attempts")
-            st.dataframe(
-                df_grasp[["timestamp", "object_id", "position", "success", "grasp_type", "retries"]],
-                width="stretch",
-                height=400
+    if not logs:
+        st.info("Empty grasp logs.")
+        st.stop()
+
+    df_grasp = pd.DataFrame(logs)
+
+    # ------------------------------------------------------------------
+    # Normalize & sanitize
+    # ------------------------------------------------------------------
+    df_grasp["timestamp"] = pd.to_datetime(df_grasp.get("timestamp"), errors="coerce")
+
+    for col in ["object_id", "grasp_type"]:
+        if col in df_grasp.columns:
+            df_grasp[col] = (
+                df_grasp[col]
+                .fillna("")
+                .astype(str)
+                .str.strip()
             )
 
-            # --- Compute Summary ---
-            total = len(df_grasp)
-            success_rate = df_grasp["success"].mean() * 100 if total > 0 else 0
-            retries_avg = df_grasp["retries"].mean() if total > 0 else 0
+    if "success" in df_grasp.columns:
+        df_grasp["success"] = df_grasp["success"].astype(bool)
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total Grasps", total)
-            col2.metric("Success Rate", f"{success_rate:.1f}%")
-            col3.metric("Avg Retries", f"{retries_avg:.2f}")
+    if "retries" in df_grasp.columns:
+        df_grasp["retries"] = pd.to_numeric(df_grasp["retries"], errors="coerce")
 
-            # --- Per Object Chart ---
-            success_per_object = (
-                df_grasp.groupby("object_id")["success"]
-                .mean()
-                .reset_index()
-                .rename(columns={"success": "success_rate"})
+    df_grasp = df_grasp.sort_values("timestamp", ascending=False)
+
+    # ------------------------------------------------------------------
+    # Filters
+    # ------------------------------------------------------------------
+    with st.expander("🔍 Filter Experiment Metrics", expanded=True):
+        object_ids = sorted([o for o in df_grasp["object_id"].unique() if o])
+        grasp_types = sorted([g for g in df_grasp["grasp_type"].unique() if g])
+
+        col1, col2, col3 = st.columns(3)
+
+        selected_objects = col1.multiselect(
+            "Object ID",
+            options=["ALL"] + object_ids,
+            default=["ALL"]
+        )
+
+        selected_success = col2.multiselect(
+            "Success",
+            options=["ALL", "True", "False"],
+            default=["ALL"]
+        )
+
+        selected_grasp_types = col3.multiselect(
+            "Grasp Type",
+            options=["ALL"] + grasp_types,
+            default=["ALL"]
+        )
+
+    # ------------------------------------------------------------------
+    # Apply filters
+    # ------------------------------------------------------------------
+    filtered_df = df_grasp.copy()
+
+    if "ALL" not in selected_objects:
+        filtered_df = filtered_df[
+            filtered_df["object_id"].isin(selected_objects)
+        ]
+
+    if "ALL" not in selected_success:
+        success_bool = [s == "True" for s in selected_success]
+        filtered_df = filtered_df[
+            filtered_df["success"].isin(success_bool)
+        ]
+
+    if "ALL" not in selected_grasp_types:
+        filtered_df = filtered_df[
+            filtered_df["grasp_type"].isin(selected_grasp_types)
+        ]
+
+    if filtered_df.empty:
+        st.warning("No data matches the selected filters.")
+        st.stop()
+
+    # ------------------------------------------------------------------
+    # Table
+    # ------------------------------------------------------------------
+    st.markdown("### 📋 Recent Grasp Attempts")
+    st.dataframe(
+        filtered_df[
+            ["timestamp", "object_id", "position", "success", "grasp_type", "retries"]
+        ],
+        width="stretch",
+        height=400
+    )
+
+    # ------------------------------------------------------------------
+    # Metrics (safe for small samples)
+    # ------------------------------------------------------------------
+    total = len(filtered_df)
+    success_rate = filtered_df["success"].mean() * 100 if total >= 1 else 0
+    retries_avg = filtered_df["retries"].mean() if total >= 1 else 0
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Grasps", total)
+    col2.metric("Success Rate", f"{success_rate:.1f}%")
+    col3.metric("Avg Retries", f"{retries_avg:.2f}")
+
+    # ------------------------------------------------------------------
+    # Per-object success rate chart
+    # ------------------------------------------------------------------
+    success_per_object = (
+        filtered_df
+        .groupby("object_id")["success"]
+        .mean()
+        .reset_index()
+        .rename(columns={"success": "success_rate"})
+    )
+
+    if not success_per_object.empty:
+        st.markdown("### 🧱 Success Rate per Object")
+
+        chart = (
+            alt.Chart(success_per_object)
+            .mark_bar()
+            .encode(
+                x=alt.X("object_id:N", title="Object ID"),
+                y=alt.Y(
+                    "success_rate:Q",
+                    title="Success Rate",
+                    axis=alt.Axis(format="%")
+                ),
+                tooltip=[
+                    "object_id:N",
+                    alt.Tooltip("success_rate:Q", format=".2%")
+                ],
             )
-            if not success_per_object.empty:
-                st.markdown("### 🧱 Success Rate per Object")
-                chart = (
-                    alt.Chart(success_per_object)
-                    .mark_bar()
-                    .encode(
-                        x=alt.X("object_id:N", title="Object ID"),
-                        y=alt.Y("success_rate:Q", title="Success Rate", axis=alt.Axis(format="%")),
-                        tooltip=["object_id:N", alt.Tooltip("success_rate:Q", format=".2%")],
-                    )
-                    .properties(height=300)
-                )
-                st.altair_chart(chart, width='stretch')
+            .properties(height=300)
+        )
 
-            # --- Timeline Chart ---
-            st.markdown("### ⏱️ Grasp Attempts Over Time")
-            timeline = (
-                alt.Chart(df_grasp)
-                .mark_circle(size=80)
-                .encode(
-                    x=alt.X("timestamp:T", title="Time"),
-                    y=alt.Y("success:N", title="Success (True/False)"),
-                    color="success:N",
-                    tooltip=["timestamp:T", "object_id:N", "success:N", "retries:Q"],
-                )
-                .properties(height=300)
-            )
-            st.altair_chart(timeline, width='stretch')
+        st.altair_chart(chart, width="stretch")
 
-        else:
-            st.info("Empty grasp logs.")
+    # ------------------------------------------------------------------
+    # Timeline chart
+    # ------------------------------------------------------------------
+    st.markdown("### ⏱️ Grasp Attempts Over Time")
+
+    timeline = (
+        alt.Chart(filtered_df)
+        .mark_circle(size=80)
+        .encode(
+            x=alt.X("timestamp:T", title="Time"),
+            y=alt.Y("success:N", title="Success"),
+            color="success:N",
+            tooltip=[
+                "timestamp:T",
+                "object_id:N",
+                "success:N",
+                "retries:Q",
+            ],
+        )
+        .properties(height=300)
+    )
+
+    st.altair_chart(timeline, width="stretch")
 
 # 📊 Refined Uncertainty Analysis Dashboard with Statistical Tests
 with tabs[3]:
-    st.title("🎯 Uncertainty Analysis Dashboard")
+    st.subheader("🎯 Uncertainty Analysis Dashboard")
     st.markdown("*Open World Grasping (OWG) Project - Uncertainty Estimation Module*")
     
     # Load data
@@ -548,7 +687,7 @@ with tabs[3]:
     st.markdown("---")
     st.header("📊 Key Metrics Overview")
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     with col1:
         total_experiments = len(filtered_df)
@@ -567,15 +706,16 @@ with tabs[3]:
             st.metric("Avg Confidence", f"{avg_confidence:.3f}")
         else:
             st.metric("Avg Confidence", "N/A")
-    
+
     with col4:
-        if safe_column_exists(filtered_df, 'retries'):
-            avg_attempts = filtered_df['retries'].mean()
-            st.metric("Avg Attempts", f"{avg_attempts:.2f}")
-        else:
-            st.metric("Avg Attempts", "N/A")
-    
+        if safe_column_exists(filtered_df, 'attempts'):
+            st.metric("Avg Experiment Attempts", f"{filtered_df['attempts'].mean():.2f}")
+
     with col5:
+        if safe_column_exists(filtered_df, 'grasp_retries'):
+            st.metric("Avg Grasp Retries", f"{filtered_df['grasp_retries'].mean():.2f}")
+
+    with col6:
         if 'batch_id' in filtered_df.columns:
             unique_batches = filtered_df['batch_id'].dropna().unique()
             st.metric("Unique Batches", len(unique_batches))
@@ -619,7 +759,7 @@ with tabs[3]:
                 fig.update_layout(height=400)
                 fig.update_yaxes(range=[-0.1, 1.1])  # Fix y-axis range
                 fig.update_xaxes(range=[0, 1])  # Fix x-axis range
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             
             with col2:
                 # Correlation statistics
@@ -637,7 +777,7 @@ with tabs[3]:
                         strength = "moderate"
                     else:
                         strength = "strong"
-                    st.info(f"Correlation is **{strength}** and **{get_significance_marker(p_value) if p_value < 0.05 else 'not significant'}**")
+                    st.info(f"Correlation is **{strength}** and {get_significance_marker(p_value) if p_value < 0.05 else 'not significant'}")
         else:
             st.warning("⚠️ No valid data available after filtering invalid confidence values")
     else:
@@ -664,7 +804,7 @@ with tabs[3]:
                 )
                 fig.update_traces(texttemplate='%{text:.1%}', textposition='outside')
                 fig.update_layout(height=400, yaxis_range=[0, 1.1])
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             
             with col2:
                 # Confidence by model category
@@ -687,12 +827,12 @@ with tabs[3]:
                         height=400,
                         yaxis_range=[0, 1.1]
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                 else:
                     st.info("Confidence data not available")
             
             # Show detailed statistics
-            st.dataframe(model_perf, use_container_width=True)
+            st.dataframe(model_perf, width='stretch')
         else:
             st.info("No model category data available for analysis")
     else:
@@ -732,7 +872,7 @@ with tabs[3]:
                 yaxis_title="Actual Accuracy",
                 height=400
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         
         with col2:
             st.markdown("**Calibration Metrics:**")
@@ -814,7 +954,7 @@ with tabs[3]:
                     labels={'group': 'Experiment Group', 'overall_confidence': 'Overall Confidence'}
                 )
                 fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
         else:
             st.info("Need at least 2 experiment groups for comparison")
     else:
@@ -896,7 +1036,7 @@ with tabs[3]:
                 )
                 
                 fig.update_layout(height=400, showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
         else:
             st.info("Need at least 2 model categories for comparison")
     else:
@@ -934,7 +1074,7 @@ with tabs[3]:
                     posthoc_display = posthoc_df.copy()
                     posthoc_display['p_value'] = posthoc_display['p_value'].apply(lambda x: f"{x:.4f}")
                     posthoc_display['significant'] = posthoc_display['significant'].apply(lambda x: "Yes ✓" if x else "No")
-                    st.dataframe(posthoc_display, use_container_width=True)
+                    st.dataframe(posthoc_display, width='stretch')
             
             # Visualization
             fig = px.box(
@@ -945,7 +1085,7 @@ with tabs[3]:
                 labels={'prompt_type': 'Prompt Type', 'overall_confidence': 'Overall Confidence'}
             )
             fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             st.info("Need at least 2 prompt types for ANOVA")
     else:
@@ -986,7 +1126,7 @@ with tabs[3]:
                 height=400,
                 yaxis_range=[0, 1.1]
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             st.info("Stage-wise confidence data not available")
     
@@ -1017,7 +1157,7 @@ with tabs[3]:
                 yaxis_title="Entropy",
                 height=400
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
         else:
             st.info("Stage-wise entropy data not available")
     
@@ -1039,7 +1179,7 @@ with tabs[3]:
                     labels={'overall_confidence': 'Overall Confidence', 'overall_entropy': 'Overall Entropy'}
                 )
                 fig.update_layout(height=400)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
     
     # ===== SECTION E: INDIVIDUAL EXPERIMENT EXPLORER =====
     st.markdown("---")
@@ -1059,7 +1199,7 @@ with tabs[3]:
     
     st.dataframe(
         sorted_df,
-        use_container_width=True,
+        width='stretch',
         height=400
     )
     
@@ -1102,7 +1242,7 @@ with tabs[4]:
     litellm_col1, litellm_col2 = st.columns([2, 2])
 
     with litellm_col1:
-        if st.button("🔍 Check LiteLLM Status", use_container_width=True):
+        if st.button("🔍 Check LiteLLM Status", width='stretch'):
             with st.spinner("Checking LiteLLM server..."):
                 try:
                     result = check_litellm()   # <-- Clean call
@@ -1130,7 +1270,7 @@ with tabs[4]:
                     st.error(f"❌ Error checking LiteLLM: {e}")
     
     with litellm_col2:
-    #     if st.button("▶️ Start LiteLLM", use_container_width=True):
+    #     if st.button("▶️ Start LiteLLM", width='stretch'):
     #         with st.spinner("Starting LiteLLM server..."):
     #             try:
     #                 import subprocess
@@ -1391,11 +1531,11 @@ with tabs[4]:
     preview_col, save_col = st.columns(2)
     
     with preview_col:
-        if st.button("👁️ Preview Full Config YAML", use_container_width=True):
+        if st.button("👁️ Preview Full Config YAML", width='stretch'):
             st.session_state['show_config_preview'] = True
     
     with save_col:
-        if st.button("💾 Save Config", use_container_width=True):
+        if st.button("💾 Save Config", width='stretch'):
             import yaml
             from datetime import datetime
             
@@ -1619,7 +1759,7 @@ with tabs[4]:
     
     run_col1, run_col2 = st.columns([3, 1])
     with run_col1:
-        if st.button("▶️ Run Experiment Pipeline", use_container_width=True, type="primary"):
+        if st.button("▶️ Run Experiment Pipeline", width='stretch', type="primary"):
             if not st.session_state.get('litellm_running', False):
                 st.error("❌ LiteLLM is not running. Please start it first.")
             else:
@@ -1687,5 +1827,5 @@ with tabs[4]:
                         st.error(f"❌ Error running experiment: {e}")
     
     with run_col2:
-        if st.button("🔄 Restart PyBullet", use_container_width=True):
+        if st.button("🔄 Restart PyBullet", width='stretch'):
             st.info("PyBullet will be restarted when running the experiment")
