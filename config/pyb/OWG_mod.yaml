@@ -92,7 +92,7 @@ planning:
       polygon_thickness: 1
 
   request:
-    model_name: 'gpt-4o'
+    model_name: 'llama3.2-vision-11b'
     detail: 'auto'
     temperature: 0.1
     n: 1
@@ -140,7 +140,7 @@ grasping:
       polygon_thickness: 2
 
   request:
-    model_name: 'gpt-4o'
+    model_name: 'llama3.2-vision-11b'
     detail: 'auto'
     temperature: 0.1
     n: 1

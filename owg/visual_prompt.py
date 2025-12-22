@@ -582,6 +582,9 @@ class VisualPrompterPlanning(VisualPrompterGrounding):
         # Remove bullet points like "* {...}"
         cleaned = re.sub(r"^\s*[\*\-]\s*", "", cleaned, flags=re.MULTILINE)
 
+        # FIX: Replace double braces with single braces
+        cleaned = cleaned.replace("{{", "{").replace("}}", "}")
+
         # Replace single quotes with double quotes
         cleaned = cleaned.replace("'", "\"")
 
